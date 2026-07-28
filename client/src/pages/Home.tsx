@@ -8,6 +8,7 @@ import { filtersToParams } from "@/lib/filterParams";
 import { SpotMap, MapPoint } from "@/components/SpotMap";
 import { Button } from "@/components/ui/button";
 import { Search, Wind, Compass, Waves } from "lucide-react";
+import heroImg from "@/assets/hero.jpg";
 import { SpotListItem, MONTHS, tagLabel } from "@/lib/types";
 
 const QUICK_TYPES = ["flat-water", "waves", "freestyle", "foil"];
@@ -41,7 +42,7 @@ export default function Home() {
       {/* ─── Hero ─── */}
       <section className="relative">
         <div className="absolute inset-0">
-          <img src="/img/hero.jpg" alt="" className="h-full w-full object-cover" />
+          <img src={heroImg} alt="" className="h-full w-full object-cover" />
           <div className="absolute inset-0 bg-gradient-to-b from-primary/70 via-primary/45 to-primary/75" />
           <div className="absolute inset-0 bg-gradient-to-t from-background via-transparent to-transparent" />
         </div>

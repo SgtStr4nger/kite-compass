@@ -2,8 +2,9 @@ import { Link } from "wouter";
 import { SpotListItem, tagLabel } from "@/lib/types";
 import { ScoreBadge, SeasonBadge, Chip } from "./Badges";
 import { Wind, Gauge, CalendarDays, MapPin } from "lucide-react";
+import placeholderSpot from "@/assets/placeholder-spot.jpg";
 
-const PLACEHOLDER = "/img/placeholder-spot.jpg";
+const PLACEHOLDER = placeholderSpot;
 
 export function SpotCard({
   spot,

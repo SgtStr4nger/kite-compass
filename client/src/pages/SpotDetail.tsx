@@ -9,8 +9,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { SpotDetail as SpotDetailT, MONTHS, tagLabel } from "@/lib/types";
 import { getHashSearch } from "@/lib/filterParams";
 import { Wind, Gauge, CalendarDays, MapPin, Plane, ExternalLink, ArrowLeft, Navigation } from "lucide-react";
+import placeholderSpot from "@/assets/placeholder-spot.jpg";
 
-const PLACEHOLDER = "/img/placeholder-spot.jpg";
+const PLACEHOLDER = placeholderSpot;
 
 function scoreFor(spot: SpotDetailT, month: string) {
   const rec = spot.monthly.find(m => m.month === month);
