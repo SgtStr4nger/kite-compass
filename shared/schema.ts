@@ -27,6 +27,10 @@ export const spots = sqliteTable("spots", {
   region: text("region").default(""),
   latitude: real("latitude"),
   longitude: real("longitude"),
+  // Weather enrichment metadata (Open-Meteo). Per-month values live on monthlyRecords.
+  dataSource: text("data_source").default(""),                 // e.g. 'open-meteo'
+  dataLastRefreshedAt: text("data_last_refreshed_at"),          // ISO timestamp of last enrichment
+  dataQualityNote: text("data_quality_note").default(""),       // admin-only note (partial success, etc.)
   googleMapsUrl: text("google_maps_url").default(""),
   windyUrl: text("windy_url").default(""),
   windfinderUrl: text("windfinder_url").default(""),
@@ -75,6 +79,14 @@ export const monthlyRecords = sqliteTable("monthly_records", {
   gusts: real("gusts"),
   windDays: integer("wind_days"),
   seasonLabel: text("season_label").default("good"), // peak|good|okay|off
+  // ── Open-Meteo enriched metrics (canonical units: wind in knots, waves in metres, period in seconds) ──
+  avgWind10mKnots: real("avg_wind_10m_knots"),
+  maxWind10mKnots: real("max_wind_10m_knots"),          // monthly peak of daily-max 10m wind (gust proxy)
+  windyDaysCount: integer("windy_days_count"),          // days meeting the windy-day threshold
+  avgWaveHeightM: real("avg_wave_height_m"),
+  maxWaveHeightM: real("max_wave_height_m"),
+  avgWavePeriodS: real("avg_wave_period_s"),
+  dominantWaveDirectionDeg: real("dominant_wave_direction_deg"),
   windSourceName: text("wind_source_name").default(""),
   windSourceUrl: text("wind_source_url").default(""),
   internalNotes: text("internal_notes").default(""),

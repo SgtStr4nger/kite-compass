@@ -13,7 +13,7 @@ import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { SpotDetail, MonthlyRecord, MONTHS, tagLabel } from "@/lib/types";
-import { ArrowLeft, Eye, Save, Trash2, Upload, Plus } from "lucide-react";
+import { ArrowLeft, Eye, Save, Trash2, Upload, Plus, CloudDownload, RefreshCw, CheckCircle2, AlertTriangle } from "lucide-react";
 
 const SPOT_TYPES = ["flat-water", "chop", "waves", "lagoon", "foil", "freestyle"];
 const RIDER_LEVELS = ["beginner", "intermediate", "advanced"];
@@ -99,6 +99,31 @@ export default function AdminSpotEditor() {
     await queryClient.invalidateQueries({ queryKey: ["/api/admin/spots"] });
     setForm(f => ({ ...f, published: true, hasDraft: false }));
     toast({ title: "Spot published" });
+  };
+
+  // ── Weather enrichment (Open-Meteo, Pattern B: explicit admin action) ──
+  const [enriching, setEnriching] = useState(false);
+  const hasCoords = form.latitude != null && form.longitude != null;
+  const enrich = async () => {
+    // Persist any unsaved coordinate edits first so the server reads current values.
+    const sid = await saveSpot();
+    if (!sid) return;
+    setEnriching(true);
+    try {
+      const out = await api<any>("POST", `/api/admin/spots/${sid}/enrich`);
+      // Reload the spot so the monthly rows + refresh metadata reflect new drafts.
+      await queryClient.invalidateQueries({ queryKey: [`/api/admin/spots/${sid}`] });
+      const fresh = await api<SpotDetail>("GET", `/api/admin/spots/${sid}`);
+      const { monthly: m, ...rest } = fresh;
+      setForm(rest); setMonthly(m);
+      toast({
+        title: `Weather data refreshed — ${out.monthsWritten} months`,
+        description: (out.waveAvailable ? "Wind + wave data applied as drafts. " : "Wind applied; no wave coverage here. ") +
+          "Review and publish months to go live." + (out.qualityNote ? ` (${out.qualityNote})` : ""),
+      });
+    } catch (e: any) {
+      toast({ title: "Enrichment failed", description: String(e.message || e) + " — existing data was left unchanged.", variant: "destructive" });
+    } finally { setEnriching(false); }
   };
 
   const preview = async () => {
@@ -217,6 +242,45 @@ export default function AdminSpotEditor() {
               <span className="text-sm text-muted-foreground">Manual</span>
               <Switch checked={form.rankingMode === "auto"} onCheckedChange={c => set("rankingMode", c ? "auto" : "manual")} data-testid="switch-ranking-mode" />
               <span className="text-sm text-muted-foreground">Auto</span>
+            </div>
+          </div>
+        </Section>
+
+        {/* Weather data (Open-Meteo enrichment) */}
+        <Section title="Weather data" hint="Multi-year Open-Meteo averages (2015–2024). Fills wind & wave metrics as drafts — your season labels and manual scores are always kept.">
+          <div className="rounded-xl border border-border bg-secondary/40 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  {form.dataLastRefreshedAt ? (
+                    <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                  ) : (
+                    <CloudDownload className="h-4 w-4 text-muted-foreground" />
+                  )}
+                  <span className="font-medium text-foreground" data-testid="text-enrich-status">
+                    {form.dataLastRefreshedAt ? "Weather data present" : "Not enriched yet"}
+                  </span>
+                </div>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {form.dataLastRefreshedAt
+                    ? <>Last refreshed {new Date(form.dataLastRefreshedAt).toLocaleString()} · source Open-Meteo</>
+                    : <>Pull monthly wind & wave averages from Open-Meteo. Saved as drafts for you to review and publish.</>}
+                </p>
+                {form.dataQualityNote ? (
+                  <p className="mt-1 flex items-start gap-1.5 text-xs text-amber-700">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> {form.dataQualityNote}
+                  </p>
+                ) : null}
+                {!hasCoords ? (
+                  <p className="mt-1 flex items-start gap-1.5 text-xs text-amber-700" data-testid="text-enrich-nocoords">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> Add latitude & longitude above, then save, to enable enrichment.
+                  </p>
+                ) : null}
+              </div>
+              <Button onClick={enrich} disabled={enriching || busy || !hasCoords} className="gap-2 shrink-0" data-testid="button-enrich">
+                <RefreshCw className={`h-4 w-4 ${enriching ? "animate-spin" : ""}`} />
+                {enriching ? "Refreshing…" : form.dataLastRefreshedAt ? "Refresh weather data" : "Enrich weather data"}
+              </Button>
             </div>
           </div>
         </Section>

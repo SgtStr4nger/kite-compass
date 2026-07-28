@@ -8,6 +8,14 @@ export interface MonthlyRecord {
   gusts: number | null;
   windDays: number | null;
   seasonLabel: string; // peak|good|okay|off
+  // Open-Meteo enriched metrics (wind in knots, waves in metres, period in seconds)
+  avgWind10mKnots: number | null;
+  maxWind10mKnots: number | null;
+  windyDaysCount: number | null;
+  avgWaveHeightM: number | null;
+  maxWaveHeightM: number | null;
+  avgWavePeriodS: number | null;
+  dominantWaveDirectionDeg: number | null;
   windSourceName: string;
   windSourceUrl: string;
   internalNotes: string;
@@ -23,6 +31,9 @@ export interface Spot {
   region: string;
   latitude: number | null;
   longitude: number | null;
+  dataSource?: string;
+  dataLastRefreshedAt?: string | null;
+  dataQualityNote?: string;
   googleMapsUrl: string;
   windyUrl: string;
   windfinderUrl: string;
@@ -50,6 +61,8 @@ export interface SpotListItem extends Spot {
   monthRecord: MonthlyRecord | null;
   score: number | null;
   monthsAvailable: string[];
+  /** 12 entries in fixed Jan→Dec order (see MONTHS); season label per month or null. */
+  seasonByMonth: (string | null)[];
 }
 
 export interface SpotDetail extends Spot {

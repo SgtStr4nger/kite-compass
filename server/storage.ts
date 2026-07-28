@@ -11,6 +11,33 @@ const sqlite = new Database("data.db");
 sqlite.pragma("journal_mode = WAL");
 export const db = drizzle(sqlite);
 
+// ── Lightweight, idempotent column migrations ──
+// Drizzle here talks straight to better-sqlite3 with no migration runner, so we
+// additively add any missing columns at startup. ALTER TABLE ADD COLUMN is cheap
+// and safe; we guard each one against the current table_info so re-runs are no-ops.
+function ensureColumns(table: string, cols: { name: string; ddl: string }[]) {
+  const existing = new Set(
+    (sqlite.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map(r => r.name),
+  );
+  for (const c of cols) {
+    if (!existing.has(c.name)) sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${c.ddl}`);
+  }
+}
+ensureColumns("spots", [
+  { name: "data_source", ddl: "data_source TEXT DEFAULT ''" },
+  { name: "data_last_refreshed_at", ddl: "data_last_refreshed_at TEXT" },
+  { name: "data_quality_note", ddl: "data_quality_note TEXT DEFAULT ''" },
+]);
+ensureColumns("monthly_records", [
+  { name: "avg_wind_10m_knots", ddl: "avg_wind_10m_knots REAL" },
+  { name: "max_wind_10m_knots", ddl: "max_wind_10m_knots REAL" },
+  { name: "windy_days_count", ddl: "windy_days_count INTEGER" },
+  { name: "avg_wave_height_m", ddl: "avg_wave_height_m REAL" },
+  { name: "max_wave_height_m", ddl: "max_wave_height_m REAL" },
+  { name: "avg_wave_period_s", ddl: "avg_wave_period_s REAL" },
+  { name: "dominant_wave_direction_deg", ddl: "dominant_wave_direction_deg REAL" },
+]);
+
 const now = () => new Date().toISOString();
 
 // Fields excluded when taking a "published snapshot" of an entity's content.

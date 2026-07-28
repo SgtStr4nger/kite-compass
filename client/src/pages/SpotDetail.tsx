@@ -6,9 +6,9 @@ import { SpotMap } from "@/components/SpotMap";
 import { ScoreBadge, SeasonBadge, Chip } from "@/components/Badges";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { SpotDetail as SpotDetailT, MONTHS, tagLabel } from "@/lib/types";
+import { SpotDetail as SpotDetailT, MonthlyRecord, MONTHS, SEASON_META, tagLabel } from "@/lib/types";
 import { getHashSearch } from "@/lib/filterParams";
-import { Wind, Gauge, CalendarDays, MapPin, Plane, ExternalLink, ArrowLeft, Navigation } from "lucide-react";
+import { Wind, Gauge, CalendarDays, MapPin, Plane, ExternalLink, ArrowLeft, Navigation, Waves } from "lucide-react";
 import placeholderSpot from "@/assets/placeholder-spot.jpg";
 
 const PLACEHOLDER = placeholderSpot;
@@ -134,41 +134,8 @@ export default function SpotDetail() {
               </section>
             )}
 
-            {/* monthly overview */}
-            <section>
-              <h2 className="font-serif text-2xl font-semibold text-foreground">Month by month</h2>
-              <div className="mt-4 overflow-hidden rounded-2xl border border-card-border">
-                <table className="w-full text-sm">
-                  <thead className="bg-secondary/60 text-left text-xs uppercase tracking-wide text-muted-foreground">
-                    <tr>
-                      <th className="px-4 py-3 font-medium">Month</th>
-                      <th className="px-4 py-3 font-medium">Season</th>
-                      <th className="px-4 py-3 text-right font-medium">Avg wind</th>
-                      <th className="px-4 py-3 text-right font-medium">Gusts</th>
-                      <th className="px-4 py-3 text-right font-medium">Wind days</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {monthlySorted.map(r => {
-                      const on = selectedMonth === r.month;
-                      return (
-                        <tr key={r.id} className={`border-t border-border ${on ? "bg-accent/10" : ""}`} data-testid={`row-month-${r.month}`}>
-                          <td className="px-4 py-3 font-medium text-foreground">{r.month}</td>
-                          <td className="px-4 py-3"><SeasonBadge label={r.seasonLabel} /></td>
-                          <td className="px-4 py-3 text-right tabular-nums">{r.averageBaseWind != null ? `${r.averageBaseWind} kn` : "—"}</td>
-                          <td className="px-4 py-3 text-right tabular-nums">{r.gusts != null ? `${r.gusts} kn` : "—"}</td>
-                          <td className="px-4 py-3 text-right tabular-nums">{r.windDays != null ? r.windDays : "—"}</td>
-                        </tr>
-                      );
-                    })}
-                    {monthlySorted.length === 0 && (
-                      <tr><td colSpan={5} className="px-4 py-6 text-center text-muted-foreground">No monthly data yet.</td></tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-              <p className="mt-2 text-xs text-muted-foreground">All wind speeds in knots.</p>
-            </section>
+            {/* When it works best */}
+            <WhenItWorksBest monthly={monthlySorted} selectedMonth={selectedMonth} />
           </div>
 
           {/* sidebar */}
@@ -181,9 +148,21 @@ export default function SpotDetail() {
                   <SeasonBadge label={activeRec.seasonLabel} />
                 </div>
                 <dl className="space-y-3 text-sm">
-                  <Metric icon={Wind} label="Average wind" value={activeRec.averageBaseWind != null ? `${activeRec.averageBaseWind} kn` : "—"} />
-                  <Metric icon={Gauge} label="Gusts" value={activeRec.gusts != null ? `${activeRec.gusts} kn` : "—"} />
-                  <Metric icon={CalendarDays} label="Wind days" value={activeRec.windDays != null ? `${activeRec.windDays} / month` : "—"} />
+                  {(() => {
+                    const avgWind = activeRec.avgWind10mKnots ?? activeRec.averageBaseWind;
+                    const gust = activeRec.maxWind10mKnots ?? activeRec.gusts;
+                    const windyDays = activeRec.windyDaysCount ?? activeRec.windDays;
+                    return (
+                      <>
+                        <Metric icon={Wind} label="Average wind" value={avgWind != null ? `${avgWind} kn` : "—"} />
+                        <Metric icon={Gauge} label="Gusts (typical)" value={gust != null ? `${gust} kn` : "—"} />
+                        <Metric icon={CalendarDays} label="Windy days" value={windyDays != null ? `${windyDays} / month` : "—"} />
+                        {activeRec.avgWaveHeightM != null && (
+                          <Metric icon={Waves} label="Avg wave" value={`${activeRec.avgWaveHeightM} m`} />
+                        )}
+                      </>
+                    );
+                  })()}
                 </dl>
               </div>
             )}
@@ -255,6 +234,167 @@ function Metric({ icon: Icon, label, value }: { icon: any; label: string; value:
     <div className="flex items-center justify-between">
       <dt className="flex items-center gap-2 text-muted-foreground"><Icon className="h-4 w-4 text-primary" />{label}</dt>
       <dd className="font-semibold tabular-nums text-foreground">{value}</dd>
+    </div>
+  );
+}
+
+// ── "When it works best" — season strip + two sparklines + 12-month table ──
+function WhenItWorksBest({ monthly, selectedMonth }: { monthly: MonthlyRecord[]; selectedMonth: string | null }) {
+  // Always render all 12 months in fixed Jan–Dec order; missing months show as gaps.
+  const byMonth = new Map(monthly.map(m => [m.month, m]));
+  const rows = MONTHS.map(m => byMonth.get(m) ?? null);
+  const hasAny = monthly.length > 0;
+
+  const windSeries = rows.map(r => (r?.avgWind10mKnots ?? r?.averageBaseWind ?? null));
+  const windyDaySeries = rows.map(r => (r?.windyDaysCount ?? r?.windDays ?? null));
+  const hasWaves = monthly.some(m => m.avgWaveHeightM != null);
+  const hasWavePeriod = monthly.some(m => m.avgWavePeriodS != null);
+
+  // Summary numbers for the sparkline labels.
+  const windVals = windSeries.filter((v): v is number => v != null);
+  const windyVals = windyDaySeries.filter((v): v is number => v != null);
+  const peakWind = windVals.length ? Math.max(...windVals) : null;
+  const peakWindyDays = windyVals.length ? Math.max(...windyVals) : null;
+
+  if (!hasAny) {
+    return (
+      <section>
+        <h2 className="font-serif text-2xl font-semibold text-foreground">When it works best</h2>
+        <p className="mt-3 text-muted-foreground">No monthly data yet.</p>
+      </section>
+    );
+  }
+
+  return (
+    <section data-testid="section-when-it-works">
+      <h2 className="font-serif text-2xl font-semibold text-foreground">When it works best</h2>
+
+      {/* Season strip — Jan–Dec, colour-coded by season label */}
+      <div className="mt-4">
+        <div className="flex gap-1" data-testid="season-strip">
+          {MONTHS.map((m, i) => {
+            const rec = rows[i];
+            const meta = rec ? SEASON_META[rec.seasonLabel] : undefined;
+            const on = selectedMonth === m;
+            return (
+              <div key={m} className="flex-1 text-center" title={rec ? `${m} · ${meta?.label ?? rec.seasonLabel}` : m}>
+                <div className={`h-8 rounded-md ${meta ? meta.dot : "bg-stone-200"} ${on ? "ring-2 ring-offset-1 ring-foreground/40" : ""}`} />
+                <div className="mt-1 text-[10px] font-medium uppercase text-muted-foreground">{m.slice(0, 1)}</div>
+              </div>
+            );
+          })}
+        </div>
+        {/* legend */}
+        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1">
+          {(["peak", "good", "okay", "off"] as const).map(k => (
+            <span key={k} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <span className={`h-2.5 w-2.5 rounded-sm ${SEASON_META[k].dot}`} /> {SEASON_META[k].label}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* Two sparklines — avg wind, windy days */}
+      <div className="mt-6 grid gap-4 sm:grid-cols-2">
+        <SparkCard
+          label="Average wind through the year"
+          summary={peakWind != null ? `up to ${peakWind} kn` : "—"}
+          series={windSeries}
+          unit="kn"
+        />
+        <SparkCard
+          label="Windy days through the year"
+          summary={peakWindyDays != null ? `up to ${peakWindyDays} / mo` : "—"}
+          series={windyDaySeries}
+          unit="days"
+        />
+      </div>
+
+      {/* Detailed 12-month table */}
+      <div className="mt-6 overflow-hidden rounded-2xl border border-card-border">
+        <table className="w-full text-sm">
+          <thead className="bg-secondary/60 text-left text-xs uppercase tracking-wide text-muted-foreground">
+            <tr>
+              <th className="px-4 py-3 font-medium">Month</th>
+              <th className="px-4 py-3 font-medium">Season</th>
+              <th className="px-4 py-3 text-right font-medium">Avg wind</th>
+              <th className="px-4 py-3 text-right font-medium">Windy days</th>
+              {hasWaves && <th className="px-4 py-3 text-right font-medium">Avg wave</th>}
+              {hasWavePeriod && <th className="px-4 py-3 text-right font-medium">Wave period</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {MONTHS.map((m, i) => {
+              const r = rows[i];
+              const on = selectedMonth === m;
+              const cols = 4 + (hasWaves ? 1 : 0) + (hasWavePeriod ? 1 : 0);
+              if (!r) {
+                return (
+                  <tr key={m} className="border-t border-border text-muted-foreground/70">
+                    <td className="px-4 py-3 font-medium">{m}</td>
+                    <td className="px-4 py-3" colSpan={cols - 1}>—</td>
+                  </tr>
+                );
+              }
+              const avgWind = r.avgWind10mKnots ?? r.averageBaseWind;
+              const windyDays = r.windyDaysCount ?? r.windDays;
+              return (
+                <tr key={m} className={`border-t border-border ${on ? "bg-accent/10" : ""}`} data-testid={`row-month-${m}`}>
+                  <td className="px-4 py-3 font-medium text-foreground">{m}</td>
+                  <td className="px-4 py-3"><SeasonBadge label={r.seasonLabel} /></td>
+                  <td className="px-4 py-3 text-right tabular-nums">{avgWind != null ? `${avgWind} kn` : "—"}</td>
+                  <td className="px-4 py-3 text-right tabular-nums">{windyDays != null ? windyDays : "—"}</td>
+                  {hasWaves && <td className="px-4 py-3 text-right tabular-nums">{r.avgWaveHeightM != null ? `${r.avgWaveHeightM} m` : "—"}</td>}
+                  {hasWavePeriod && <td className="px-4 py-3 text-right tabular-nums">{r.avgWavePeriodS != null ? `${r.avgWavePeriodS} s` : "—"}</td>}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">Wind in knots (10 m), wave height in metres. Monthly averages from Open-Meteo (2015–2024).</p>
+    </section>
+  );
+}
+
+// Compact, axis-less sparkline card. Supportive, not dominant.
+function SparkCard({ label, summary, series, unit }: { label: string; summary: string; series: (number | null)[]; unit: string }) {
+  const W = 240, H = 44, pad = 3;
+  const vals = series.map(v => (v == null ? null : v));
+  const nums = vals.filter((v): v is number => v != null);
+  const min = nums.length ? Math.min(...nums) : 0;
+  const max = nums.length ? Math.max(...nums) : 1;
+  const range = max - min || 1;
+  const n = series.length;
+  const x = (i: number) => pad + (i * (W - 2 * pad)) / (n - 1);
+  const y = (v: number) => H - pad - ((v - min) / range) * (H - 2 * pad);
+  // Build a path, breaking across null months.
+  let d = ""; let started = false;
+  vals.forEach((v, i) => {
+    if (v == null) { started = false; return; }
+    d += `${started ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)} `;
+    started = true;
+  });
+  let peakIdx = -1;
+  vals.forEach((v, i) => {
+    if (v != null && (peakIdx < 0 || (vals[peakIdx] ?? -Infinity) < v)) peakIdx = i;
+  });
+  const peakVal = peakIdx >= 0 ? vals[peakIdx] : null;
+  return (
+    <div className="rounded-2xl border border-card-border bg-card p-4">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-sm font-medium text-foreground">{label}</span>
+        <span className="text-xs tabular-nums text-muted-foreground">{summary}</span>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="mt-2 h-11 w-full" preserveAspectRatio="none" aria-hidden="true">
+        <path d={d} fill="none" stroke="hsl(var(--primary))" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" />
+        {peakVal != null && (
+          <circle cx={x(peakIdx)} cy={y(peakVal)} r={2.4} fill="hsl(var(--primary))" />
+        )}
+      </svg>
+      <div className="mt-1 flex justify-between text-[10px] uppercase tracking-wide text-muted-foreground/70">
+        <span>Jan</span><span>Dec</span>
+      </div>
     </div>
   );
 }

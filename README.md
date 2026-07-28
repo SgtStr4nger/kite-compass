@@ -50,7 +50,11 @@ kite-compass/
 │  ├─ routes.ts         All REST routes; draft/publish serialization lives here
 │  ├─ storage.ts        IStorage interface + Drizzle implementation (single source of truth)
 │  ├─ seed.ts           Idempotent seed from seed_data.json
-│  └─ windProviders.ts  Wind-provider abstraction (Windy/Windfinder stubs — see below)
+│  ├─ enrich.ts         CLI to backfill monthly weather data from Open-Meteo (see below)
+│  ├─ windProviders.ts  Wind-provider abstraction (Windy/Windfinder stubs — see below)
+│  └─ services/
+│     ├─ openMeteo.ts   Open-Meteo fetch + per-month aggregation (pure, no DB)
+│     └─ enrichment.ts  Orchestration: writes enriched values as drafts, preserves manual data
 ├─ shared/schema.ts     Drizzle tables + Zod insert schemas (frontend + backend share these)
 ├─ seed_data.json       78 spots + 162 monthly records
 └─ data.db              SQLite database (git-ignored; created on first run/seed)
@@ -121,16 +125,77 @@ API key as an env var, register it, and enable automatic ranking mode on a spot.
 
 ---
 
+## Weather enrichment (Open-Meteo)
+
+Monthly wind and wave metrics can be **backfilled automatically from
+[Open-Meteo](https://open-meteo.com)** (free, no API key). Enrichment reads a
+spot's coordinates and computes a per-calendar-month climatology from 10 years
+of daily history, writing the results as **drafts** for review.
+
+**Data sources**
+
+- **Archive API** (`archive-api.open-meteo.com/v1/archive`) — daily
+  `wind_speed_10m_max`, `wind_gusts_10m_max`, `wind_direction_10m_dominant`,
+  requested directly in **knots** (`wind_speed_unit=kn`).
+- **Marine API** (`marine-api.open-meteo.com/v1/marine`) — daily
+  `wave_height_max`, `wave_period_max`, `wave_direction_dominant` in metres.
+  Wave data is **best-effort**: inland/lagoon spots with no wave model degrade
+  gracefully (wind still applies; a quality note is recorded).
+
+**Aggregation** (per month, across the whole window; config in `server/services/openMeteo.ts`)
+
+| Metric              | Definition                                                                                             |
+| ------------------- | ------------------------------------------------------------------------------------------------------ |
+| `avgWind10mKnots`   | Mean of daily `wind_speed_10m_max`.                                                                    |
+| `maxWind10mKnots`   | **Typical strong-day gust** = the `GUST_PERCENTILE` (default **90th**) percentile of daily gusts. This deliberately ignores once-a-decade extremes so the figure reads as "a strong day here", not a freak storm. |
+| `windyDaysCount`    | Average days/month where daily max wind ≥ `WINDY_DAY_THRESHOLD_KNOTS` (**18 kn**).                      |
+| `avgWaveHeightM`    | Mean of daily `wave_height_max`.                                                                        |
+| `avgWavePeriodS`    | Mean of daily `wave_period_max`.                                                                        |
+| wave direction      | Circular mean of daily dominant direction.                                                             |
+
+Historical window: **2015–2024** (`HISTORY_START_YEAR` / `HISTORY_END_YEAR`).
+Thresholds and the gust percentile are single constants at the top of
+`server/services/openMeteo.ts` — change them there.
+
+**Trigger model (Pattern B — manual)**
+
+Enrichment is **never** run automatically on save. It is triggered explicitly:
+
+- **Admin editor** → a **"Refresh weather data"** button (enabled only once the
+  spot has coordinates). Calls `POST /api/admin/spots/:id/enrich`.
+- **CLI** for bulk backfill:
+
+  ```bash
+  npm run enrich -- --all              # every spot with coordinates
+  npm run enrich -- --slug kite-prasonisi
+  npm run enrich -- --id 15
+  npm run enrich -- --all --delay 500  # ms between spots (be nice to the API)
+  ```
+
+**Overwrite & safety rules**
+
+- Enrichment **overwrites** the computed wind/wave metrics but **always
+  preserves** manual editorial data: `seasonLabel`, `manualScore`,
+  `automaticWindScore` and `internalNotes`.
+- Results are written as **unpublished drafts**. The public site keeps showing
+  the last published snapshot until an admin reviews and publishes each month.
+- **Failure-safe:** if the wind fetch fails, nothing is written and existing
+  data is left intact. Missing coordinates return `422`; provider errors `502`.
+
+---
+
 ## API overview
 
 Public: `GET /api/filters`, `GET /api/spots` (month + tag filters, sorted by
-score), `GET /api/spots/slug/:slug`, `GET /api/countries`.
+score; each row includes `seasonByMonth`, a 12-entry Jan→Dec season strip),
+`GET /api/spots/slug/:slug`, `GET /api/countries`.
 
 Auth: `POST /api/auth/setup`, `GET /api/auth/status`, `POST /api/auth/login`,
 `GET /api/auth/me`.
 
 Admin (bearer token): CRUD + publish for `/api/admin/spots[/:id]` and
-`/api/admin/monthly[/:id]`, plus `GET /api/admin/filters`.
+`/api/admin/monthly[/:id]`, `POST /api/admin/spots/:id/enrich` (Open-Meteo
+refresh → drafts), plus `GET /api/admin/filters`.
 
 ---
 

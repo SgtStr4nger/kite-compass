@@ -3,8 +3,15 @@ import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import crypto from 'node:crypto';
 import { storage } from "./storage";
+import { enrichSpotById, MissingCoordinatesError } from "./services/enrichment";
 import { insertSpotSchema, insertMonthlySchema } from "@shared/schema";
 import type { Spot, MonthlyRecord } from "@shared/schema";
+
+// Fixed Jan→Dec order for compact season strips (server-side; mirrors client MONTHS).
+const MONTH_ORDER = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+] as const;
 
 /* ───────── Auth helpers (no cookies/localStorage — Bearer token) ───────── */
 const AUTH_SECRET = process.env.AUTH_SECRET || "kite-compass-dev-secret-change-me";
@@ -162,11 +169,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     let rows = spots.map(s => {
       const rec = month ? monthly.find(m => m.spotId === s.id && m.month === month) : undefined;
-      const monthsAvail = monthly.filter(m => m.spotId === s.id).map(m => m.month);
+      const spotMonthly = monthly.filter(m => m.spotId === s.id);
+      const monthsAvail = spotMonthly.map(m => m.month);
+      // Compact season strip: 12 entries in fixed Jan→Dec order, each the season
+      // label for that month or null when no published record exists. Lets result
+      // cards render a season strip without a second request.
+      const bySeason = new Map(spotMonthly.map(m => [m.month, m.seasonLabel]));
+      const seasonByMonth = MONTH_ORDER.map(mn => bySeason.get(mn) ?? null);
       const score = rec
         ? (s.rankingMode === "auto" ? rec.automaticWindScore : rec.manualScore)
         : null;
-      return { ...s, monthRecord: rec || null, score, monthsAvailable: monthsAvail };
+      return { ...s, monthRecord: rec || null, score, monthsAvailable: monthsAvail, seasonByMonth };
     });
 
     if (month) rows = rows.filter(r => r.monthsAvailable.includes(month));
@@ -234,6 +247,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.delete("/api/admin/spots/:id", requireAuth, async (req, res) => {
     await storage.deleteSpot(Number(req.params.id));
     res.json({ ok: true });
+  });
+
+  // Weather enrichment (Open-Meteo). Writes DRAFTS; admin reviews + publishes.
+  // Failure-safe: on API error nothing is overwritten and existing data stays.
+  app.post("/api/admin/spots/:id/enrich", requireAuth, async (req, res) => {
+    try {
+      const out = await enrichSpotById(Number(req.params.id));
+      res.json(out);
+    } catch (e: any) {
+      if (e instanceof MissingCoordinatesError) return res.status(422).json({ error: e.message });
+      if (/No spot with id/.test(e?.message ?? "")) return res.status(404).json({ error: e.message });
+      // Upstream/API failure — surfaced to the admin; data left intact.
+      res.status(502).json({ error: `Weather provider error: ${e?.message ?? "unknown"}` });
+    }
   });
 
   // Monthly records
