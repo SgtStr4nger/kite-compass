@@ -20,7 +20,7 @@
 
 import { storage } from "./storage";
 import { enrichSpot, enrichSpotById, enrichSpotBySlug, MissingCoordinatesError } from "./services/enrichment";
-import { HISTORY_START_YEAR, HISTORY_END_YEAR, WINDY_DAY_THRESHOLD_KNOTS } from "./services/openMeteo";
+import { HISTORY_START_YEAR, HISTORY_END_YEAR, KITEABLE_WIND_THRESHOLD_KNOTS, KITEABLE_DAY_MIN_HOURS } from "./services/openMeteo";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -31,7 +31,7 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 async function main() {
   const delay = Number(arg("delay") ?? 300);
-  console.log(`Open-Meteo enrichment — window ${HISTORY_START_YEAR}–${HISTORY_END_YEAR}, windy-day threshold ${WINDY_DAY_THRESHOLD_KNOTS} kn`);
+  console.log(`Open-Meteo enrichment — window ${HISTORY_START_YEAR}–${HISTORY_END_YEAR}, kiteable threshold ${KITEABLE_WIND_THRESHOLD_KNOTS} kn / ${KITEABLE_DAY_MIN_HOURS} h`);
   console.log("Enriched values are saved as DRAFTS. Review and publish in the admin.\n");
 
   // ── Single spot ──

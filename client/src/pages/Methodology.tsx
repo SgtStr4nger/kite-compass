@@ -55,8 +55,7 @@ export default function Methodology() {
           <div className="mt-5 space-y-3">
             {[
               { label: "peak", text: "The best window of the year — most consistent wind and conditions." },
-              { label: "good", text: "Reliable and well worth a trip, if not the absolute peak." },
-              { label: "okay", text: "Rideable, but less consistent — expect some down days." },
+              { label: "side", text: "Reliable and well worth a trip, though not the absolute peak." },
               { label: "off", text: "Off season — wind is unreliable or the spot is best avoided." },
             ].map(({ label, text }) => (
               <div key={label} className="flex items-start gap-3 rounded-xl border border-card-border bg-card p-4">

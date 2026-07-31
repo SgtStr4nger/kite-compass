@@ -7,8 +7,9 @@
  * the seed_data.json shape ({ spots: [...], months: [...] }) and re-run.
  */
 import { db } from "./storage";
-import { spots, monthlyRecords, filterDefs } from "@shared/schema";
+import { spots, monthlyRecords, filterDefs, schools, stays } from "@shared/schema";
 import { eq } from "drizzle-orm";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -40,6 +41,7 @@ async function run() {
   const slugToId: Record<string, number> = {};
   for (const s of data.spots) {
     const row = {
+      publicId: s.public_id || crypto.randomUUID(),
       slug: s.slug, name: s.name, country: s.country || "", region: s.region || "",
       latitude: s.latitude, longitude: s.longitude,
       googleMapsUrl: s.google_maps_url || "", windyUrl: "", windfinderUrl: "",
@@ -86,8 +88,11 @@ async function run() {
       manualScore: m.manual_score ?? null,
       automaticWindScore: null,
       averageBaseWind: m.average_base_wind ?? null,
+      avgKiteableWind10mKnots: m.avg_kiteable_wind_10m_knots ?? m.average_base_wind ?? null,
       gusts: m.gusts ?? null,
       windDays: m.wind_days ?? null,
+      kiteableDaysCount: m.kiteable_days_count ?? m.wind_days ?? null,
+      avgKiteableHoursPerDay: m.avg_kiteable_hours_per_day ?? null,
       seasonLabel: m.season_label || "good",
       windSourceName: m.wind_source_name || "",
       windSourceUrl: m.wind_source_url || "",
@@ -100,7 +105,53 @@ async function run() {
     mc++;
   }
 
-  console.log(`Seed complete: spots created=${created} updated=${updated}, monthly records=${mc}`);
+  // ── Linked schools/stays ──
+  let schoolCount = 0;
+  for (const s of data.schools ?? []) {
+    const spotId = slugToId[s.spot_slug];
+    if (!spotId || !s.name) continue;
+    const row = {
+      spotId,
+      name: s.name,
+      websiteUrl: s.website_url || "",
+      mapUrl: s.map_url || "",
+      offersRental: !!s.offers_rental,
+      offersLessons: !!s.offers_lessons,
+      notes: s.notes || "",
+      favorite: !!s.favorite,
+      published: true,
+      hasDraft: false,
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    const ins = db.insert(schools).values(row as any).returning().get();
+    db.update(schools).set({ publishedSnapshot: JSON.stringify(ins) } as any).where(eq(schools.id, ins.id)).run();
+    schoolCount++;
+  }
+
+  let stayCount = 0;
+  for (const s of data.stays ?? []) {
+    const spotId = slugToId[s.spot_slug];
+    if (!spotId || !s.name) continue;
+    const row = {
+      spotId,
+      name: s.name,
+      type: s.type || "",
+      websiteUrl: s.website_url || "",
+      mapUrl: s.map_url || "",
+      notes: s.notes || "",
+      favorite: !!s.favorite,
+      published: true,
+      hasDraft: false,
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    const ins = db.insert(stays).values(row as any).returning().get();
+    db.update(stays).set({ publishedSnapshot: JSON.stringify(ins) } as any).where(eq(stays.id, ins.id)).run();
+    stayCount++;
+  }
+
+  console.log(`Seed complete: spots created=${created} updated=${updated}, monthly records=${mc}, schools=${schoolCount}, stays=${stayCount}`);
 }
 
 run().then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1); });

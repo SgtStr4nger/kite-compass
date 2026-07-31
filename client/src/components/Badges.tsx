@@ -16,11 +16,12 @@ export function ScoreBadge({ score, size = "md" }: { score: number | null; size?
 }
 
 export function SeasonBadge({ label }: { label: string }) {
-  const meta = SEASON_META[label] || SEASON_META.good;
+  const meta = SEASON_META[label] || SEASON_META.side;
   return (
     <span
       className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${meta.color}`}
       data-testid={`badge-season-${label}`}
+      title={label === "peak" ? "Peak season" : label === "side" ? "Side season" : label === "off" ? "Off season" : undefined}
     >
       <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />
       {meta.label}

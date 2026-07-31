@@ -3,7 +3,7 @@ import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { CompassMark } from "@/components/Logo";
 import { Button } from "@/components/ui/button";
-import { LogOut, LayoutGrid, ExternalLink } from "lucide-react";
+import { LogOut, LayoutGrid, Database, FileText, ExternalLink } from "lucide-react";
 
 export function AdminLayout({ children }: { children: ReactNode }) {
   const { email, logout } = useAuth();
@@ -19,6 +19,12 @@ export function AdminLayout({ children }: { children: ReactNode }) {
         <nav className="mt-2 flex-1 space-y-1 px-3">
           <Link href="/admin/spots" className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-sidebar-foreground/90 no-underline hover:bg-sidebar-accent" data-testid="link-admin-spots">
             <LayoutGrid className="h-4 w-4" /> Spots
+          </Link>
+          <Link href="/admin/data" className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-sidebar-foreground/90 no-underline hover:bg-sidebar-accent" data-testid="link-admin-data">
+            <Database className="h-4 w-4" /> Data
+          </Link>
+          <Link href="/admin/impressum" className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-sidebar-foreground/90 no-underline hover:bg-sidebar-accent" data-testid="link-admin-impressum">
+            <FileText className="h-4 w-4" /> Impressum
           </Link>
           <a href="#/" target="_blank" className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-sidebar-foreground/90 no-underline hover:bg-sidebar-accent" data-testid="link-admin-viewsite">
             <ExternalLink className="h-4 w-4" /> View public site

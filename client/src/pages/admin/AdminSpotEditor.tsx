@@ -12,13 +12,13 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
-import { SpotDetail, MonthlyRecord, MONTHS, tagLabel } from "@/lib/types";
-import { ArrowLeft, Eye, Save, Trash2, Upload, Plus, CloudDownload, RefreshCw, CheckCircle2, AlertTriangle } from "lucide-react";
+import { SpotDetail, MonthlyRecord, MONTHS, tagLabel, School, Stay } from "@/lib/types";
+import { ArrowLeft, Eye, Save, Trash2, Upload, Plus, CloudDownload, RefreshCw, CheckCircle2, AlertTriangle, CheckCheck } from "lucide-react";
 
 const SPOT_TYPES = ["flat-water", "chop", "waves", "lagoon", "foil", "freestyle"];
 const RIDER_LEVELS = ["beginner", "intermediate", "advanced"];
 const VIBE_TAGS = ["city", "town", "village", "remote", "touristy", "local-scene", "family-friendly", "nightlife"];
-const SEASONS = ["peak", "good", "okay", "off"];
+const SEASONS = ["peak", "side", "off"];
 
 function slugify(s: string) {
   return s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
@@ -46,18 +46,23 @@ export default function AdminSpotEditor() {
     destinationSummary: "", destinationDescription: "", kiteContextDescription: "", teaserText: "",
     heroImageUrl: "", nearestAirportName: "", nearestAirportCode: "", airportTransferTime: "", transportNote: "",
     beginnerFriendly: false, spotTypes: [], riderLevels: [], vibeTags: [],
-    sourceNotes: "", internalNotes: "", rankingMode: "manual",
+    sourceNotes: "", internalNotes: "", rankingMode: "auto",
     published: false, hasDraft: true,
   });
   const [monthly, setMonthly] = useState<MonthlyRecord[]>([]);
+  const [schools, setSchools] = useState<School[]>([]);
+  const [stays, setStays] = useState<Stay[]>([]);
+  const [importJson, setImportJson] = useState("");
   const [savedId, setSavedId] = useState<number | null>(id);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (loaded) {
-      const { monthly: m, ...rest } = loaded;
+      const { monthly: m, schools: sc, stays: st, ...rest } = loaded;
       setForm(rest);
       setMonthly(m);
+      setSchools(sc ?? []);
+      setStays(st ?? []);
       setSavedId(loaded.id);
     }
   }, [loaded]);
@@ -131,12 +136,37 @@ export default function AdminSpotEditor() {
     if (sid && form.slug) window.open(`#/spots/${form.slug || slugify(form.name || "")}?preview=1`, "_blank");
   };
 
+  const exportSpot = async () => {
+    const sid = await saveSpot();
+    if (!sid) return;
+    const data = await api<any>("GET", `/api/admin/spots/${sid}/export`);
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank");
+  };
+
+  const importSpot = async () => {
+    const sid = await saveSpot();
+    if (!sid) return;
+    if (!importJson.trim()) { toast({ title: "Paste export JSON first", variant: "destructive" }); return; }
+    try {
+      const payload = JSON.parse(importJson);
+      const fresh = await api<SpotDetail>("POST", `/api/admin/spots/${sid}/import`, payload);
+      const { monthly: m, schools: sc, stays: st, ...rest } = fresh;
+      setForm(rest); setMonthly(m); setSchools(sc ?? []); setStays(st ?? []);
+      await queryClient.invalidateQueries({ queryKey: [`/api/admin/spots/${sid}`] });
+      toast({ title: "Import complete" });
+    } catch (e: any) {
+      toast({ title: "Import failed", description: String(e.message || e), variant: "destructive" });
+    }
+  };
+
   // ── Monthly record helpers ──
   const usedMonths = monthly.map(m => m.month);
   const addMonth = async (month: string) => {
     if (!savedId) { toast({ title: "Save the spot first", variant: "destructive" }); return; }
     const rec = await api<MonthlyRecord>("POST", "/api/admin/monthly", {
-      spotId: savedId, month, seasonLabel: "good", published: false, hasDraft: true,
+      spotId: savedId, month, seasonLabel: "side", published: false, hasDraft: true,
     });
     setMonthly(m => [...m, rec]);
   };
@@ -153,6 +183,16 @@ export default function AdminSpotEditor() {
     updateMonthLocal(rec.id, { published: true, hasDraft: false });
     toast({ title: `${rec.month} published` });
   };
+  const publishAllMonths = async () => {
+    if (!savedId) return;
+    await saveSpot();
+    const out = await api<{ publishedCount: number }>("POST", `/api/admin/spots/${savedId}/monthly/publish`);
+    await queryClient.invalidateQueries({ queryKey: [`/api/admin/spots/${savedId}`] });
+    const fresh = await api<SpotDetail>("GET", `/api/admin/spots/${savedId}`);
+    const { monthly: m, schools: sc, stays: st, ...rest } = fresh;
+    setForm(rest); setMonthly(m); setSchools(sc ?? []); setStays(st ?? []);
+    toast({ title: `Published ${out.publishedCount} monthly records` });
+  };
   const deleteMonth = async (mid: number) => {
     await api("DELETE", `/api/admin/monthly/${mid}`);
     setMonthly(ms => ms.filter(m => m.id !== mid));
@@ -166,6 +206,7 @@ export default function AdminSpotEditor() {
           <ArrowLeft className="h-4 w-4" /> All spots
         </button>
         <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={exportSpot} disabled={busy} className="gap-2" data-testid="button-export-spot"><Upload className="h-4 w-4" /> Export</Button>
           <Button variant="outline" onClick={preview} disabled={busy || !form.name} className="gap-2" data-testid="button-preview"><Eye className="h-4 w-4" /> Preview</Button>
           <Button variant="outline" onClick={saveSpot} disabled={busy} className="gap-2" data-testid="button-save-draft"><Save className="h-4 w-4" /> Save draft</Button>
           <Button onClick={publishSpot} disabled={busy} data-testid="button-publish-spot">Publish spot</Button>
@@ -182,6 +223,7 @@ export default function AdminSpotEditor() {
         <Section title="Basics">
           <Field label="Name" required><Input value={form.name || ""} onChange={e => { const v = e.target.value; set("name", v); if (isNew && !savedId) set("slug", slugify(v)); }} data-testid="input-name" /></Field>
           <Field label="Slug (URL)" hint="Used in the address, e.g. /spots/el-medano"><Input value={form.slug || ""} onChange={e => set("slug", slugify(e.target.value))} data-testid="input-slug" /></Field>
+          <Field label="Public ID" hint="Stable identifier for exports and imports"><Input value={form.publicId || "—"} disabled data-testid="input-public-id" /></Field>
           <div className="grid grid-cols-2 gap-4">
             <Field label="Country"><Input value={form.country || ""} onChange={e => set("country", e.target.value)} data-testid="input-country" /></Field>
             <Field label="Region"><Input value={form.region || ""} onChange={e => set("region", e.target.value)} data-testid="input-region" /></Field>
@@ -199,6 +241,15 @@ export default function AdminSpotEditor() {
           <Field label="Summary" hint="One-liner at the top of the spot page"><Textarea rows={2} value={form.destinationSummary || ""} onChange={e => set("destinationSummary", e.target.value)} data-testid="input-summary" /></Field>
           <Field label="Destination description"><Textarea rows={4} value={form.destinationDescription || ""} onChange={e => set("destinationDescription", e.target.value)} data-testid="input-destdesc" /></Field>
           <Field label="Kite context description"><Textarea rows={4} value={form.kiteContextDescription || ""} onChange={e => set("kiteContextDescription", e.target.value)} data-testid="input-kitedesc" /></Field>
+        </Section>
+
+        {/* Import / export */}
+        <Section title="Import / export" hint="Export writes the current spot, monthly records, schools and stays as JSON; paste it back here to restore the same structure.">
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={exportSpot} disabled={busy} className="gap-2" data-testid="button-export-spot-inline"><Upload className="h-4 w-4" /> Export JSON</Button>
+            <Button onClick={importSpot} disabled={busy} className="gap-2" data-testid="button-import-spot"><CloudDownload className="h-4 w-4" /> Import JSON</Button>
+          </div>
+          <Textarea rows={8} value={importJson} onChange={e => setImportJson(e.target.value)} placeholder="Paste exported JSON here" data-testid="textarea-import-json" />
         </Section>
 
         {/* Tags */}
@@ -236,7 +287,7 @@ export default function AdminSpotEditor() {
           <div className="flex items-center justify-between rounded-xl border border-border bg-secondary/40 p-4">
             <div>
               <div className="font-medium text-foreground">Scoring mode: {form.rankingMode === "auto" ? "Automatic (wind)" : "Manual"}</div>
-              <p className="text-sm text-muted-foreground">Manual uses the score you enter per month. Automatic (future) will derive it from wind inputs.</p>
+              <p className="text-sm text-muted-foreground">Manual uses the score you enter per month. Automatic derives it from the weather data and keeps the monthly season label in sync.</p>
             </div>
             <div className="flex items-center gap-2">
               <span className="text-sm text-muted-foreground">Manual</span>
@@ -296,6 +347,11 @@ export default function AdminSpotEditor() {
                 </button>
               ))}
               {MONTHS.filter(m => !usedMonths.includes(m)).length === 0 && <span className="text-xs text-muted-foreground">All 12 months added.</span>}
+              <div className="ml-auto">
+                <Button size="sm" variant="outline" onClick={publishAllMonths} data-testid="button-publish-all-months">
+                  <CheckCheck className="mr-2 h-4 w-4" /> Publish all months
+                </Button>
+              </div>
             </div>
           )}
           <div className="space-y-3">
@@ -307,6 +363,34 @@ export default function AdminSpotEditor() {
                 onDelete={() => deleteMonth((rec as MonthlyRecord).id)} />
             ))}
           </div>
+        </Section>
+
+        {/* Linked schools */}
+        <Section title="Schools" hint={savedId ? "Shown on the public spot page when present" : "Save the spot first to add schools"}>
+          {savedId && <LinkedEntityEditor
+            kind="school"
+            spotId={savedId}
+            items={schools}
+            setItems={setSchools}
+            createPath="/api/admin/schools"
+            updatePathPrefix="/api/admin/schools"
+            publishPathPrefix="/api/admin/schools"
+            deletePathPrefix="/api/admin/schools"
+          />}
+        </Section>
+
+        {/* Linked stays */}
+        <Section title="Stays" hint={savedId ? "Shown on the public spot page when present" : "Save the spot first to add stays"}>
+          {savedId && <LinkedEntityEditor
+            kind="stay"
+            spotId={savedId}
+            items={stays}
+            setItems={setStays}
+            createPath="/api/admin/stays"
+            updatePathPrefix="/api/admin/stays"
+            publishPathPrefix="/api/admin/stays"
+            deletePathPrefix="/api/admin/stays"
+          />}
         </Section>
       </div>
     </AdminLayout>
@@ -366,23 +450,30 @@ function MonthlyRow({ rec, autoMode, onChange, onSave, onPublish, onDelete }: {
         <SmallField label="Manual score">
           <Input type="number" step="0.1" value={rec.manualScore ?? ""} onChange={e => onChange({ manualScore: num(e.target.value) })} data-testid={`input-manualscore-${rec.month}`} />
         </SmallField>
-        <SmallField label="Avg wind (kn)">
-          <Input type="number" step="any" value={rec.averageBaseWind ?? ""} onChange={e => onChange({ averageBaseWind: num(e.target.value) })} data-testid={`input-avgwind-${rec.month}`} />
+        <SmallField label="Kiteable wind (kn)">
+          <Input type="number" step="any" value={rec.avgKiteableWind10mKnots ?? ""} onChange={e => onChange({ avgKiteableWind10mKnots: num(e.target.value), averageBaseWind: num(e.target.value) })} data-testid={`input-avgkitewind-${rec.month}`} />
         </SmallField>
-        <SmallField label="Gusts (kn)">
-          <Input type="number" step="any" value={rec.gusts ?? ""} onChange={e => onChange({ gusts: num(e.target.value) })} data-testid={`input-gusts-${rec.month}`} />
+        <SmallField label="Kiteable days">
+          <Input type="number" value={rec.kiteableDaysCount ?? ""} onChange={e => onChange({ kiteableDaysCount: num(e.target.value), windDays: num(e.target.value) })} data-testid={`input-kitedays-${rec.month}`} />
         </SmallField>
-        <SmallField label="Wind days">
-          <Input type="number" value={rec.windDays ?? ""} onChange={e => onChange({ windDays: num(e.target.value) })} data-testid={`input-winddays-${rec.month}`} />
+        <SmallField label="Kiteable hours/day">
+          <Input type="number" step="any" value={rec.avgKiteableHoursPerDay ?? ""} onChange={e => onChange({ avgKiteableHoursPerDay: num(e.target.value) })} data-testid={`input-kitehours-${rec.month}`} />
         </SmallField>
-        <SmallField label="Season">
-          <select value={rec.seasonLabel} onChange={e => onChange({ seasonLabel: e.target.value })} className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm" data-testid={`select-season-${rec.month}`}>
+        <SmallField label={autoMode ? "Season (automatic)" : "Season"}>
+          <select
+            value={rec.seasonLabel}
+            onChange={e => onChange({ seasonLabel: e.target.value })}
+            className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+            data-testid={`select-season-${rec.month}`}
+            disabled={autoMode}
+            title={autoMode ? "Derived automatically from the score" : undefined}
+          >
             {SEASONS.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
         </SmallField>
         {autoMode && (
           <SmallField label="Auto score">
-            <Input type="number" step="0.1" value={rec.automaticWindScore ?? ""} disabled title="Reserved for the future automatic wind score" />
+            <Input type="number" step="0.1" value={rec.automaticWindScore ?? ""} disabled title="Computed automatically from weather data" />
           </SmallField>
         )}
       </div>
@@ -395,4 +486,72 @@ function MonthlyRow({ rec, autoMode, onChange, onSave, onPublish, onDelete }: {
 }
 function SmallField({ label, children }: { label: string; children: React.ReactNode }) {
   return <div><label className="mb-1 block text-xs text-muted-foreground">{label}</label>{children}</div>;
+}
+
+function LinkedEntityEditor({ kind, spotId, items, setItems, createPath, updatePathPrefix, publishPathPrefix, deletePathPrefix }: {
+  kind: "school" | "stay";
+  spotId: number;
+  items: any[];
+  setItems: React.Dispatch<React.SetStateAction<any[]>>;
+  createPath: string;
+  updatePathPrefix: string;
+  publishPathPrefix: string;
+  deletePathPrefix: string;
+}) {
+  const add = async () => {
+    const created = await api<any>("POST", createPath, kind === "school"
+      ? { spotId, name: "New school", published: false, hasDraft: true }
+      : { spotId, name: "New stay", published: false, hasDraft: true });
+    setItems(prev => [...prev, created]);
+  };
+  const patch = async (id: number, patch: any) => {
+    const updated = await api<any>("PATCH", `${updatePathPrefix}/${id}`, patch);
+    setItems(prev => prev.map(item => item.id === id ? updated : item));
+  };
+  const publish = async (id: number) => {
+    const updated = await api<any>("POST", `${publishPathPrefix}/${id}/publish`);
+    setItems(prev => prev.map(item => item.id === id ? updated : item));
+  };
+  const del = async (id: number) => {
+    await api("DELETE", `${deletePathPrefix}/${id}`);
+    setItems(prev => prev.filter(item => item.id !== id));
+  };
+
+  return (
+    <div className="space-y-3">
+      <Button variant="outline" size="sm" onClick={add} className="gap-2"><Plus className="h-4 w-4" /> Add {kind}</Button>
+      {items.length === 0 ? <p className="text-sm text-muted-foreground">No {kind}s yet.</p> : items.map(item => (
+        <div key={item.id} className="rounded-xl border border-border p-4">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div className="font-medium text-foreground">{item.name}</div>
+            <div className="text-xs text-muted-foreground">
+              {item.published && !item.hasDraft ? "Published" : item.published ? "Draft edits" : "Draft"}
+            </div>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <SmallField label="Name"><Input value={item.name} onChange={e => patch(item.id, { name: e.target.value })} /></SmallField>
+            <SmallField label="Website"><Input value={(item as any).websiteUrl || ""} onChange={e => patch(item.id, { websiteUrl: e.target.value })} /></SmallField>
+            <SmallField label="Map link"><Input value={(item as any).mapUrl || ""} onChange={e => patch(item.id, { mapUrl: e.target.value })} /></SmallField>
+            {kind === "stay" ? <SmallField label="Type"><Input value={(item as any).type || ""} onChange={e => patch(item.id, { type: e.target.value })} /></SmallField> : null}
+          </div>
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            <SmallField label="Notes"><Textarea rows={2} value={(item as any).notes || ""} onChange={e => patch(item.id, { notes: e.target.value })} /></SmallField>
+            <div className="space-y-2 pt-6">
+              <label className="flex items-center gap-2 text-sm"><Checkbox checked={!!(item as any).favorite} onCheckedChange={c => patch(item.id, { favorite: !!c })} /> Favorite</label>
+              {kind === "school" ? (
+                <>
+                  <label className="flex items-center gap-2 text-sm"><Checkbox checked={!!(item as any).offersLessons} onCheckedChange={c => patch(item.id, { offersLessons: !!c })} /> Lessons</label>
+                  <label className="flex items-center gap-2 text-sm"><Checkbox checked={!!(item as any).offersRental} onCheckedChange={c => patch(item.id, { offersRental: !!c })} /> Rental</label>
+                </>
+              ) : null}
+            </div>
+          </div>
+          <div className="mt-3 flex justify-end gap-2">
+            <Button size="sm" variant="outline" onClick={() => publish(item.id)}>Publish</Button>
+            <Button size="sm" variant="destructive" onClick={() => del(item.id)}><Trash2 className="h-4 w-4" /></Button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }

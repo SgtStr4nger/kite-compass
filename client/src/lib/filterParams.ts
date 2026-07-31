@@ -3,11 +3,11 @@ import { FilterState, emptyFilters } from "@/components/Filters";
 // Build the query string for /api/spots and for the results URL.
 export function filtersToParams(f: FilterState): URLSearchParams {
   const p = new URLSearchParams();
-  if (f.month) p.set("month", f.month);
+  if (f.query) p.set("q", f.query);
+  f.months.forEach(v => p.append("month", v));
   f.spotType.forEach(v => p.append("spotType", v));
   f.riderLevel.forEach(v => p.append("riderLevel", v));
   f.vibe.forEach(v => p.append("vibe", v));
-  if (f.beginner) p.set("beginner", "1");
   if (f.country) p.set("country", f.country);
   return p;
 }
@@ -16,11 +16,11 @@ export function paramsToFilters(search: string): FilterState {
   const p = new URLSearchParams(search);
   return {
     ...emptyFilters,
-    month: p.get("month"),
+    query: p.get("q") || "",
+    months: p.getAll("month"),
     spotType: p.getAll("spotType"),
     riderLevel: p.getAll("riderLevel"),
     vibe: p.getAll("vibe"),
-    beginner: p.get("beginner") === "1",
     country: p.get("country"),
   };
 }

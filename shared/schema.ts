@@ -21,6 +21,7 @@ export type User = typeof users.$inferSelect;
  */
 export const spots = sqliteTable("spots", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  publicId: text("public_id").default(""),
   slug: text("slug").notNull().unique(),
   name: text("name").notNull(),
   country: text("country").default(""),
@@ -50,7 +51,7 @@ export const spots = sqliteTable("spots", {
   internalNotes: text("internal_notes").default(""),
   sourceNotes: text("source_notes").default(""),
   // ranking mode: 'manual' | 'auto' (admin-only control)
-  rankingMode: text("ranking_mode").default("manual"),
+  rankingMode: text("ranking_mode").default("auto"),
   // draft/publish
   published: integer("published", { mode: "boolean" }).default(false),
   hasDraft: integer("has_draft", { mode: "boolean" }).default(true),
@@ -80,9 +81,9 @@ export const monthlyRecords = sqliteTable("monthly_records", {
   windDays: integer("wind_days"),
   seasonLabel: text("season_label").default("good"), // peak|good|okay|off
   // ── Open-Meteo enriched metrics (canonical units: wind in knots, waves in metres, period in seconds) ──
-  avgWind10mKnots: real("avg_wind_10m_knots"),
-  maxWind10mKnots: real("max_wind_10m_knots"),          // monthly peak of daily-max 10m wind (gust proxy)
-  windyDaysCount: integer("windy_days_count"),          // days meeting the windy-day threshold
+  avgKiteableWind10mKnots: real("avg_kiteable_wind_10m_knots"),
+  kiteableDaysCount: integer("kiteable_days_count"),    // days meeting the kiteable-hour threshold
+  avgKiteableHoursPerDay: real("avg_kiteable_hours_per_day"),
   avgWaveHeightM: real("avg_wave_height_m"),
   maxWaveHeightM: real("max_wave_height_m"),
   avgWavePeriodS: real("avg_wave_period_s"),
@@ -104,6 +105,74 @@ export const insertMonthlySchema = createInsertSchema(monthlyRecords).omit({
 });
 export type InsertMonthly = z.infer<typeof insertMonthlySchema>;
 export type MonthlyRecord = typeof monthlyRecords.$inferSelect;
+
+/* ─────────────── Schools ─────────────── */
+export const schools = sqliteTable("schools", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  spotId: integer("spot_id").notNull(),
+  name: text("name").notNull(),
+  websiteUrl: text("website_url").default(""),
+  mapUrl: text("map_url").default(""),
+  offersRental: integer("offers_rental", { mode: "boolean" }).default(false),
+  offersLessons: integer("offers_lessons", { mode: "boolean" }).default(false),
+  notes: text("notes").default(""),
+  favorite: integer("favorite", { mode: "boolean" }).default(false),
+  published: integer("published", { mode: "boolean" }).default(false),
+  hasDraft: integer("has_draft", { mode: "boolean" }).default(true),
+  publishedSnapshot: text("published_snapshot"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+export const insertSchoolSchema = createInsertSchema(schools).omit({
+  id: true, createdAt: true, updatedAt: true, publishedSnapshot: true,
+}).partial().extend({
+  spotId: z.number(),
+  name: z.string().min(1),
+});
+export type InsertSchool = z.infer<typeof insertSchoolSchema>;
+export type School = typeof schools.$inferSelect;
+
+/* ─────────────── Stays ─────────────── */
+export const stays = sqliteTable("stays", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  spotId: integer("spot_id").notNull(),
+  name: text("name").notNull(),
+  type: text("type").default(""),
+  websiteUrl: text("website_url").default(""),
+  mapUrl: text("map_url").default(""),
+  notes: text("notes").default(""),
+  favorite: integer("favorite", { mode: "boolean" }).default(false),
+  published: integer("published", { mode: "boolean" }).default(false),
+  hasDraft: integer("has_draft", { mode: "boolean" }).default(true),
+  publishedSnapshot: text("published_snapshot"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+export const insertStaySchema = createInsertSchema(stays).omit({
+  id: true, createdAt: true, updatedAt: true, publishedSnapshot: true,
+}).partial().extend({
+  spotId: z.number(),
+  name: z.string().min(1),
+});
+export type InsertStay = z.infer<typeof insertStaySchema>;
+export type Stay = typeof stays.$inferSelect;
+
+/* ─────────────── Site pages ─────────────── */
+export const sitePages = sqliteTable("site_pages", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  slug: text("slug").notNull().unique(),
+  title: text("title").notNull(),
+  body: text("body").notNull(),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+export const insertSitePageSchema = createInsertSchema(sitePages).omit({ id: true, createdAt: true, updatedAt: true }).partial().extend({
+  slug: z.string().min(1),
+  title: z.string().min(1),
+  body: z.string().min(1),
+});
+export type InsertSitePage = z.infer<typeof insertSitePageSchema>;
+export type SitePage = typeof sitePages.$inferSelect;
 
 /* ─────────────── Dynamic filter definitions ───────────────
  * Filterable fields are described in the DB so new filters can be added

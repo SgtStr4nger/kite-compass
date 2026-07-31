@@ -19,52 +19,65 @@
  * archive's coverage (data from 1940 onward). Change the two constants below
  * to widen/narrow the window.
  *
- * ── Daily metrics used ───────────────────────────────────────────────
- * The Archive API exposes DAILY wind aggregates (no hourly fetch needed, so a
- * 10-year pull is ~3650 rows and returns in well under a second):
- *   • wind_speed_10m_max          → daily peak 10 m wind (knots)
- *   • wind_gusts_10m_max          → daily peak gust (knots)
- *   • wind_direction_10m_dominant → daily dominant direction (unused for now)
+ * ── Hourly metrics used ──────────────────────────────────────────────
+ * The Archive API exposes hourly wind data plus daily sunrise/sunset so we can
+ * isolate the kiteable part of the day instead of averaging all 24 hours.
+ *   • wind_speed_10m              → hourly 10 m wind (knots)
+ *   • sunrise / sunset            → daily daylight window
  * Marine daily aggregates:
  *   • wave_height_max, wave_period_max, wave_direction_dominant
  *
  * ── Aggregation, per calendar month ──────────────────────────────────
- *   • avgWind10mKnots  = mean of daily wind_speed_10m_max across all days of that month in the window
- *   • gustKnots        = a TYPICAL strong-day gust, defined as the GUST_PERCENTILE (default 90th)
- *                        percentile of daily wind_gusts_10m_max. We deliberately do NOT use the
- *                        all-time max: a single decade-extreme storm (e.g. 70 kn) is misleading on a
- *                        planning page. The 90th percentile answers "what do gusts reach on a strong
- *                        day here" while ignoring rare outliers. Falls back to the percentile of daily
- *                        wind_speed_10m_max when the gust series is unavailable.
- *   • windyDaysCount   = average number of days per month where wind_speed_10m_max >= WINDY_DAY_THRESHOLD_KNOTS
- *                        (rounded), i.e. total qualifying days / number of years in window.
+ *   • avgKiteableWind10mKnots = mean wind speed across kiteable daylight hours only
+ *   • kiteableDaysCount       = average number of days per month with at least
+ *                               KITEABLE_DAY_MIN_HOURS kiteable hours
+ *   • avgKiteableHoursPerDay  = average kiteable hours per calendar day
  *   • avgWaveHeightM   = mean of daily wave_height_max
  *   • maxWaveHeightM   = max  of daily wave_height_max
  *   • avgWavePeriodS   = mean of daily wave_period_max
  *   • dominantWaveDirectionDeg = circular mean of daily wave_direction_dominant
  *
- * NOTE: "avg wind" here is the mean of daily *maxima*, not a 24h mean. For a
- * planning tool this better reflects the ridable part of the day and keeps the
- * fetch light. This choice is documented in the README as well.
+ * NOTE: The public wind number now reflects daylight hours only. This is the
+ * most kite-relevant planning view and keeps the metric easy to explain.
  */
 
 // ── Configuration ──────────────────────────────────────────────────────────
-/** A day counts as "windy" when the daily max 10 m wind is at or above this many knots. Single source of truth. */
-export const WINDY_DAY_THRESHOLD_KNOTS = 18;
+/** A day counts as kiteable when daylight hours hit this wind threshold. */
+export const KITEABLE_WIND_THRESHOLD_KNOTS = 15;
+/** A day counts as kiteable when it has at least this many kiteable daylight hours. */
+export const KITEABLE_DAY_MIN_HOURS = 3;
 /** Historical window (inclusive). 10 full years. */
 export const HISTORY_START_YEAR = 2015;
 export const HISTORY_END_YEAR = 2024;
-/**
- * Percentile (0..1) used to derive the "typical strong-day gust" from daily gust maxima.
- * 0.90 = the gust level reached on the windiest ~10% of days, i.e. a strong-but-normal day,
- * NOT the once-a-decade storm peak. Lower this for a calmer figure, raise it toward 1 for a
- * more extreme one.
- */
-export const GUST_PERCENTILE = 0.90;
+export const DEFAULT_DAYLIGHT_START = "06:00";
+export const DEFAULT_DAYLIGHT_END = "18:00";
 
 const ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive";
 const MARINE_URL = "https://marine-api.open-meteo.com/v1/marine";
 const DATA_SOURCE = "open-meteo";
+
+const openMeteoStats = {
+  archiveRequests: 0,
+  marineRequests: 0,
+  failedRequests: 0,
+};
+
+const MIN_REQUEST_GAP_MS = 1200;
+let lastRequestAt = 0;
+
+async function waitForRequestSlot(): Promise<void> {
+  const now = Date.now();
+  const waitMs = Math.max(0, lastRequestAt + MIN_REQUEST_GAP_MS - now);
+  if (waitMs > 0) await new Promise(resolve => setTimeout(resolve, waitMs));
+  lastRequestAt = Date.now();
+}
+
+export function getOpenMeteoStats() {
+  return {
+    ...openMeteoStats,
+    totalRequests: openMeteoStats.archiveRequests + openMeteoStats.marineRequests,
+  };
+}
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -73,10 +86,9 @@ const MONTHS = [
 
 export interface EnrichedMonth {
   month: string;
-  avgWind10mKnots: number | null;
-  /** Typical strong-day gust (GUST_PERCENTILE of daily gusts), not the all-time extreme. */
-  gustKnots: number | null;
-  windyDaysCount: number | null;
+  avgKiteableWind10mKnots: number | null;
+  kiteableDaysCount: number | null;
+  avgKiteableHoursPerDay: number | null;
   avgWaveHeightM: number | null;
   maxWaveHeightM: number | null;
   avgWavePeriodS: number | null;
@@ -94,10 +106,10 @@ export interface EnrichmentResult {
 
 // Buckets keyed 0..11 (month index)
 interface Bucket {
-  windMaxSum: number; windMaxCount: number;
-  gustSeries: number[];                    // daily gust maxima (for percentile)
-  windSeries: number[];                    // daily wind maxima (percentile fallback)
-  windyDayHits: number;                    // count of days >= threshold
+  kiteableWindSum: number; kiteableWindCount: number;
+  kiteableHourSum: number;
+  dayCount: number;
+  kiteableDayHits: number;
   waveHSum: number; waveHCount: number; waveHPeak: number | null;
   wavePSum: number; wavePCount: number;
   dirSinSum: number; dirCosSum: number; dirCount: number;
@@ -105,7 +117,7 @@ interface Bucket {
 
 function emptyBuckets(): Bucket[] {
   return Array.from({ length: 12 }, () => ({
-    windMaxSum: 0, windMaxCount: 0, gustSeries: [], windSeries: [], windyDayHits: 0,
+    kiteableWindSum: 0, kiteableWindCount: 0, kiteableHourSum: 0, dayCount: 0, kiteableDayHits: 0,
     waveHSum: 0, waveHCount: 0, waveHPeak: null, wavePSum: 0, wavePCount: 0,
     dirSinSum: 0, dirCosSum: 0, dirCount: 0,
   }));
@@ -125,13 +137,27 @@ function percentile(values: number[], p: number): number | null {
 const monthIndexFromISO = (d: string) => Number(d.slice(5, 7)) - 1; // "YYYY-MM-DD" → 0..11
 
 async function fetchJson(url: string): Promise<any> {
-  const res = await fetch(url);
-  if (!res.ok) {
+  const isArchive = url.includes("archive-api.open-meteo.com");
+  const isMarine = url.includes("marine-api.open-meteo.com");
+  const attempts = 3;
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    await waitForRequestSlot();
+    if (isArchive) openMeteoStats.archiveRequests++;
+    if (isMarine) openMeteoStats.marineRequests++;
+    const res = await fetch(url);
+    if (res.ok) return res.json();
+
+    openMeteoStats.failedRequests++;
     let detail = res.statusText;
     try { const j = await res.json(); if (j?.reason) detail = j.reason; } catch { /* ignore */ }
-    throw new Error(`Open-Meteo ${res.status}: ${detail}`);
+    lastError = new Error(`Open-Meteo ${res.status}: ${detail}`);
+    const retryable = res.status === 429 || res.status === 502 || res.status === 503 || res.status === 504;
+    if (!retryable || attempt === attempts) break;
+    await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
   }
-  return res.json();
+  throw lastError ?? new Error("Open-Meteo request failed");
 }
 
 /** Number of distinct calendar years in the window (for per-month day averaging). */
@@ -151,30 +177,65 @@ export async function enrichCoordinate(latitude: number, longitude: number): Pro
   const buckets = emptyBuckets();
   const notes: string[] = [];
 
+  const dayMap = new Map<string, {
+    monthIndex: number;
+    sunrise: string;
+    sunset: string;
+    kiteableWindSum: number;
+    kiteableWindCount: number;
+    kiteableHourCount: number;
+  }>();
+
   // ── Wind (Archive API) — required ──
   const windUrl =
     `${ARCHIVE_URL}?latitude=${latitude}&longitude=${longitude}` +
     `&start_date=${start}&end_date=${end}` +
-    `&daily=wind_speed_10m_max,wind_gusts_10m_max,wind_direction_10m_dominant` +
+    `&hourly=wind_speed_10m` +
+    `&daily=sunrise,sunset` +
     `&wind_speed_unit=kn&timezone=UTC`;
 
   const wind = await fetchJson(windUrl); // throws on failure → caller keeps existing data
-  const wTime: string[] = wind?.daily?.time ?? [];
-  const wMax: (number | null)[] = wind?.daily?.wind_speed_10m_max ?? [];
-  const gMax: (number | null)[] = wind?.daily?.wind_gusts_10m_max ?? [];
-  for (let i = 0; i < wTime.length; i++) {
-    const mi = monthIndexFromISO(wTime[i]);
-    const b = buckets[mi];
-    const w = wMax[i];
-    if (w != null && Number.isFinite(w)) {
-      b.windMaxSum += w; b.windMaxCount++;
-      b.windSeries.push(w);
-      if (w >= WINDY_DAY_THRESHOLD_KNOTS) b.windyDayHits++;
-    }
-    const g = gMax[i];
-    if (g != null && Number.isFinite(g)) b.gustSeries.push(g);
+  const dayTime: string[] = wind?.daily?.time ?? [];
+  const sunrise: string[] = wind?.daily?.sunrise ?? [];
+  const sunset: string[] = wind?.daily?.sunset ?? [];
+  for (let i = 0; i < dayTime.length; i++) {
+    const date = dayTime[i];
+    dayMap.set(date, {
+      monthIndex: monthIndexFromISO(date),
+      sunrise: sunrise[i] ?? `${date}T${DEFAULT_DAYLIGHT_START}:00Z`,
+      sunset: sunset[i] ?? `${date}T${DEFAULT_DAYLIGHT_END}:00Z`,
+      kiteableWindSum: 0,
+      kiteableWindCount: 0,
+      kiteableHourCount: 0,
+    });
   }
-  const windAvailable = wTime.length > 0;
+
+  const hourlyTimes: string[] = wind?.hourly?.time ?? [];
+  const hourlyWind: (number | null)[] = wind?.hourly?.wind_speed_10m ?? [];
+  for (let i = 0; i < hourlyTimes.length; i++) {
+    const time = hourlyTimes[i];
+    const date = time.slice(0, 10);
+    const day = dayMap.get(date);
+    if (!day) continue;
+    if (time < day.sunrise || time >= day.sunset) continue;
+    const w = hourlyWind[i];
+    if (w == null || !Number.isFinite(w)) continue;
+    if (w >= KITEABLE_WIND_THRESHOLD_KNOTS) {
+      day.kiteableHourCount++;
+      day.kiteableWindSum += w;
+      day.kiteableWindCount++;
+    }
+  }
+
+  for (const day of Array.from(dayMap.values())) {
+    const b = buckets[day.monthIndex];
+    b.dayCount++;
+    b.kiteableHourSum += day.kiteableHourCount;
+    b.kiteableWindSum += day.kiteableWindSum;
+    b.kiteableWindCount += day.kiteableWindCount;
+    if (day.kiteableHourCount >= KITEABLE_DAY_MIN_HOURS) b.kiteableDayHits++;
+  }
+  const windAvailable = hourlyTimes.length > 0 && dayMap.size > 0;
 
   // ── Waves (Marine API) — optional, best-effort ──
   let waveAvailable = false;
@@ -216,12 +277,9 @@ export async function enrichCoordinate(latitude: number, longitude: number): Pro
 
   const years = yearsInWindow();
   const months: EnrichedMonth[] = buckets.map((b, mi) => {
-    const avgWind = b.windMaxCount > 0 ? round1(b.windMaxSum / b.windMaxCount) : null;
-    // Typical strong-day gust = high percentile of daily gusts (NOT the all-time extreme).
-    // Fall back to the percentile of daily wind maxima when the gust series is missing.
-    const gustPct = percentile(b.gustSeries, GUST_PERCENTILE) ?? percentile(b.windSeries, GUST_PERCENTILE);
-    const gust = gustPct != null ? round1(gustPct) : null;
-    const windyDays = b.windMaxCount > 0 ? Math.round(b.windyDayHits / years) : null;
+    const avgWind = b.kiteableWindCount > 0 ? round1(b.kiteableWindSum / b.kiteableWindCount) : null;
+    const kiteableDays = b.dayCount > 0 ? Math.round(b.kiteableDayHits / years) : null;
+    const avgKiteableHours = b.dayCount > 0 ? round1(b.kiteableHourSum / b.dayCount) : null;
     const avgWaveH = b.waveHCount > 0 ? round1(b.waveHSum / b.waveHCount) : null;
     const maxWaveH = b.waveHPeak != null ? round1(b.waveHPeak) : null;
     const avgWaveP = b.wavePCount > 0 ? round1(b.wavePSum / b.wavePCount) : null;
@@ -233,9 +291,9 @@ export async function enrichCoordinate(latitude: number, longitude: number): Pro
     }
     return {
       month: MONTHS[mi],
-      avgWind10mKnots: avgWind,
-      gustKnots: gust,
-      windyDaysCount: windyDays,
+      avgKiteableWind10mKnots: avgWind,
+      kiteableDaysCount: kiteableDays,
+      avgKiteableHoursPerDay: avgKiteableHours,
       avgWaveHeightM: avgWaveH,
       maxWaveHeightM: maxWaveH,
       avgWavePeriodS: avgWaveP,

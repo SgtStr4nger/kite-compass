@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { SiteLayout } from "@/components/SiteChrome";
-import { FilterPanel, FilterState, MonthSelect } from "@/components/Filters";
+import { FilterPanel, FilterState } from "@/components/Filters";
 import { filtersToParams, paramsToFilters, getHashSearch } from "@/lib/filterParams";
 import { SpotCard } from "@/components/SpotCard";
 import { SpotMap, MapPoint } from "@/components/SpotMap";
@@ -50,27 +50,23 @@ export default function Results() {
 
   const activeCount =
     filters.spotType.length + filters.riderLevel.length + filters.vibe.length +
-    (filters.beginner ? 1 : 0) + (filters.country ? 1 : 0);
+    (filters.country ? 1 : 0);
 
-  const filterControls = (
-    <>
-      <div className="mb-6">
-        <div className="mb-2 text-sm font-medium text-foreground">Month <span className="text-accent">*</span></div>
-        <MonthSelect value={filters.month} onChange={(m) => setFilters(f => ({ ...f, month: m }))} required />
-      </div>
-      <FilterPanel defs={defs} countries={countries} state={filters} onChange={setFilters} />
-    </>
-  );
+  const filterControls = <FilterPanel defs={defs} countries={countries} state={filters} onChange={setFilters} />;
 
   return (
     <SiteLayout>
       <div className="mx-auto max-w-7xl px-5 py-8 md:px-8">
         <div className="mb-6">
           <h1 className="font-serif text-3xl font-semibold text-foreground">
-            {filters.month ? `Best kitesurf spots in ${filters.month}` : "Explore kitesurf spots"}
+            {filters.query
+              ? `Results for ${filters.query}`
+              : filters.months.length
+                ? `Best kitesurf spots for ${filters.months.join(", ")}`
+                : "Explore kitesurf spots"}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground" data-testid="text-result-count">
-            {isLoading ? "Loading…" : `${spots?.length ?? 0} spot${(spots?.length ?? 0) === 1 ? "" : "s"} ${filters.month ? "ranked for this month" : "— pick a month to rank them"}`}
+            {isLoading ? "Loading…" : `${spots?.length ?? 0} spot${(spots?.length ?? 0) === 1 ? "" : "s"} ${filters.months.length || filters.query ? "matched" : "available to browse"}`}
           </p>
         </div>
 
@@ -124,7 +120,8 @@ export default function Results() {
                     <div key={s.id} ref={(el) => { cardRefs.current[s.id] = el; }}>
                       <SpotCard
                         spot={s}
-                        month={filters.month}
+                        months={filters.months}
+                        query={filters.query}
                         highlighted={selectedId === s.id}
                         onHover={() => setSelectedId(s.id)}
                         onLeave={() => setSelectedId(prev => (prev === s.id ? null : prev))}
@@ -136,7 +133,7 @@ export default function Results() {
                     <Compass className="mx-auto h-10 w-10 text-muted-foreground/50" />
                     <h3 className="mt-4 font-serif text-lg font-semibold text-foreground">No spots match those filters</h3>
                     <p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">
-                      Try removing a filter or choosing a different month to widen your search.
+                      Try removing a filter or choosing different months to widen your search.
                     </p>
                   </div>
                 )}

@@ -10,7 +10,10 @@ import Home from "@/pages/Home";
 import Results from "@/pages/Results";
 import SpotDetail from "@/pages/SpotDetail";
 import Methodology from "@/pages/Methodology";
+import Impressum from "@/pages/Impressum";
 import AdminLogin from "@/pages/admin/AdminLogin";
+import AdminImpressum from "@/pages/admin/AdminImpressum";
+import AdminData from "@/pages/admin/AdminData";
 import AdminSpots from "@/pages/admin/AdminSpots";
 import AdminSpotEditor from "@/pages/admin/AdminSpotEditor";
 
@@ -21,7 +24,10 @@ function AppRouter() {
       <Route path="/results" component={Results} />
       <Route path="/spots/:slug" component={SpotDetail} />
       <Route path="/methodology" component={Methodology} />
+      <Route path="/impressum" component={Impressum} />
       <Route path="/admin" component={AdminLogin} />
+      <Route path="/admin/impressum" component={AdminImpressum} />
+      <Route path="/admin/data" component={AdminData} />
       <Route path="/admin/spots" component={AdminSpots} />
       <Route path="/admin/spots/:id" component={AdminSpotEditor} />
       <Route component={NotFound} />

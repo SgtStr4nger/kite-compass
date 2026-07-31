@@ -1,11 +1,14 @@
-import { users, spots, monthlyRecords, filterDefs } from '@shared/schema';
+import { users, spots, monthlyRecords, filterDefs, schools, stays, sitePages } from '@shared/schema';
 import type {
   User, InsertUser, Spot, InsertSpot, MonthlyRecord, InsertMonthly,
+  School, InsertSchool, Stay, InsertStay,
+  SitePage, InsertSitePage,
   FilterDef, InsertFilterDef,
 } from '@shared/schema';
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
 import { eq, and } from "drizzle-orm";
+import crypto from "node:crypto";
 
 const sqlite = new Database("data.db");
 sqlite.pragma("journal_mode = WAL");
@@ -24,14 +27,15 @@ function ensureColumns(table: string, cols: { name: string; ddl: string }[]) {
   }
 }
 ensureColumns("spots", [
+  { name: "public_id", ddl: "public_id TEXT DEFAULT ''" },
   { name: "data_source", ddl: "data_source TEXT DEFAULT ''" },
   { name: "data_last_refreshed_at", ddl: "data_last_refreshed_at TEXT" },
   { name: "data_quality_note", ddl: "data_quality_note TEXT DEFAULT ''" },
 ]);
 ensureColumns("monthly_records", [
-  { name: "avg_wind_10m_knots", ddl: "avg_wind_10m_knots REAL" },
-  { name: "max_wind_10m_knots", ddl: "max_wind_10m_knots REAL" },
-  { name: "windy_days_count", ddl: "windy_days_count INTEGER" },
+  { name: "avg_kiteable_wind_10m_knots", ddl: "avg_kiteable_wind_10m_knots REAL" },
+  { name: "kiteable_days_count", ddl: "kiteable_days_count INTEGER" },
+  { name: "avg_kiteable_hours_per_day", ddl: "avg_kiteable_hours_per_day REAL" },
   { name: "avg_wave_height_m", ddl: "avg_wave_height_m REAL" },
   { name: "max_wave_height_m", ddl: "max_wave_height_m REAL" },
   { name: "avg_wave_period_s", ddl: "avg_wave_period_s REAL" },
@@ -39,6 +43,103 @@ ensureColumns("monthly_records", [
 ]);
 
 const now = () => new Date().toISOString();
+
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS schools (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    spot_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    website_url TEXT DEFAULT '',
+    map_url TEXT DEFAULT '',
+    offers_rental INTEGER DEFAULT 0,
+    offers_lessons INTEGER DEFAULT 0,
+    notes TEXT DEFAULT '',
+    favorite INTEGER DEFAULT 0,
+    published INTEGER DEFAULT 0,
+    has_draft INTEGER DEFAULT 1,
+    published_snapshot TEXT,
+    created_at TEXT,
+    updated_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS stays (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    spot_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    type TEXT DEFAULT '',
+    website_url TEXT DEFAULT '',
+    map_url TEXT DEFAULT '',
+    notes TEXT DEFAULT '',
+    favorite INTEGER DEFAULT 0,
+    published INTEGER DEFAULT 0,
+    has_draft INTEGER DEFAULT 1,
+    published_snapshot TEXT,
+    created_at TEXT,
+    updated_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS site_pages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    created_at TEXT,
+    updated_at TEXT
+  );
+`);
+
+ensureColumns("site_pages", [
+  { name: "slug", ddl: "slug TEXT NOT NULL UNIQUE" },
+  { name: "title", ddl: "title TEXT NOT NULL" },
+  { name: "body", ddl: "body TEXT NOT NULL" },
+]);
+
+const defaultImpressumBody = [
+  "Angaben gemäß § 5 TMG",
+  "",
+  "Kite Compass",
+  "[Name des Betreibers / Unternehmens]",
+  "[Straße und Hausnummer]",
+  "[PLZ Ort]",
+  "[Land]",
+  "",
+  "Kontakt",
+  "E-Mail: [E-Mail-Adresse]",
+  "Telefon: [optional]",
+  "",
+  "Vertretungsberechtigt",
+  "[Name der vertretungsberechtigten Person]",
+  "",
+  "Haftung für Inhalte",
+  "Die Inhalte dieser Website wurden mit Sorgfalt erstellt. Für die Richtigkeit, Vollständigkeit und Aktualität der Inhalte können wir jedoch keine Gewähr übernehmen.",
+  "",
+  "Haftung für Links",
+  "Diese Website enthält Links zu externen Websites Dritter, auf deren Inhalte wir keinen Einfluss haben. Deshalb können wir für diese fremden Inhalte auch keine Gewähr übernehmen.",
+].join("\n");
+
+function ensureDefaultSitePages() {
+  const row = db.select().from(sitePages).where(eq(sitePages.slug, "impressum")).get();
+  if (!row) {
+    db.insert(sitePages).values({
+      slug: "impressum",
+      title: "Impressum",
+      body: defaultImpressumBody,
+      createdAt: now(),
+      updatedAt: now(),
+    } as any).run();
+  }
+}
+ensureDefaultSitePages();
+
+function ensureSpotPublicIds() {
+  const rows = db.select({ id: spots.id, publicId: spots.publicId }).from(spots).all();
+  for (const row of rows) {
+    if (!row.publicId) {
+      db.update(spots).set({ publicId: crypto.randomUUID(), updatedAt: now() } as any).where(eq(spots.id, row.id)).run();
+    }
+  }
+}
+ensureSpotPublicIds();
+
+db.update(spots).set({ rankingMode: "auto" } as any).run();
 
 // Fields excluded when taking a "published snapshot" of an entity's content.
 function snapshotSpot(s: Spot) {
@@ -72,9 +173,23 @@ export interface IStorage {
   updateMonthly(id: number, m: Partial<InsertMonthly>): Promise<MonthlyRecord | undefined>;
   publishMonthly(id: number): Promise<MonthlyRecord | undefined>;
   deleteMonthly(id: number): Promise<void>;
+  // linked entities
+  listSchools(spotId: number, publishedOnly: boolean): Promise<School[]>;
+  createSchool(s: InsertSchool): Promise<School>;
+  updateSchool(id: number, s: Partial<InsertSchool>): Promise<School | undefined>;
+  publishSchool(id: number): Promise<School | undefined>;
+  deleteSchool(id: number): Promise<void>;
+  listStays(spotId: number, publishedOnly: boolean): Promise<Stay[]>;
+  createStay(s: InsertStay): Promise<Stay>;
+  updateStay(id: number, s: Partial<InsertStay>): Promise<Stay | undefined>;
+  publishStay(id: number): Promise<Stay | undefined>;
+  deleteStay(id: number): Promise<void>;
   // filters
   listFilterDefs(publicOnly: boolean): Promise<FilterDef[]>;
   upsertFilterDef(f: InsertFilterDef): Promise<FilterDef>;
+  // content pages
+  getSitePageBySlug(slug: string): Promise<SitePage | undefined>;
+  upsertSitePage(page: InsertSitePage): Promise<SitePage>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -90,7 +205,7 @@ export class DatabaseStorage implements IStorage {
   async getSpot(id: number) { return db.select().from(spots).where(eq(spots.id, id)).get(); }
   async getSpotBySlug(slug: string) { return db.select().from(spots).where(eq(spots.slug, slug)).get(); }
   async createSpot(s: InsertSpot) {
-    return db.insert(spots).values({ ...s, published: false, hasDraft: true, createdAt: now(), updatedAt: now() } as any).returning().get();
+    return db.insert(spots).values({ ...s, publicId: (s as any).publicId || crypto.randomUUID(), published: false, hasDraft: true, createdAt: now(), updatedAt: now() } as any).returning().get();
   }
   async updateSpot(id: number, s: Partial<InsertSpot>) {
     return db.update(spots).set({ ...s, hasDraft: true, updatedAt: now() } as any).where(eq(spots.id, id)).returning().get();
@@ -117,10 +232,16 @@ export class DatabaseStorage implements IStorage {
   }
   async getMonthly(id: number) { return db.select().from(monthlyRecords).where(eq(monthlyRecords.id, id)).get(); }
   async createMonthly(m: InsertMonthly) {
-    return db.insert(monthlyRecords).values({ ...m, published: false, hasDraft: true, createdAt: now(), updatedAt: now() } as any).returning().get();
+    const row = { ...m } as any;
+    if (row.avgKiteableWind10mKnots != null && row.averageBaseWind == null) row.averageBaseWind = row.avgKiteableWind10mKnots;
+    if (row.kiteableDaysCount != null && row.windDays == null) row.windDays = row.kiteableDaysCount;
+    return db.insert(monthlyRecords).values({ ...row, published: false, hasDraft: true, createdAt: now(), updatedAt: now() } as any).returning().get();
   }
   async updateMonthly(id: number, m: Partial<InsertMonthly>) {
-    return db.update(monthlyRecords).set({ ...m, hasDraft: true, updatedAt: now() } as any).where(eq(monthlyRecords.id, id)).returning().get();
+    const row = { ...m } as any;
+    if (row.avgKiteableWind10mKnots != null && row.averageBaseWind == null) row.averageBaseWind = row.avgKiteableWind10mKnots;
+    if (row.kiteableDaysCount != null && row.windDays == null) row.windDays = row.kiteableDaysCount;
+    return db.update(monthlyRecords).set({ ...row, hasDraft: true, updatedAt: now() } as any).where(eq(monthlyRecords.id, id)).returning().get();
   }
   async publishMonthly(id: number) {
     const m = await this.getMonthly(id);
@@ -131,6 +252,40 @@ export class DatabaseStorage implements IStorage {
   }
   async deleteMonthly(id: number) { db.delete(monthlyRecords).where(eq(monthlyRecords.id, id)).run(); }
 
+  async listSchools(spotId: number, publishedOnly: boolean) {
+    const all = db.select().from(schools).where(eq(schools.spotId, spotId)).all();
+    return publishedOnly ? all.filter(s => s.published) : all;
+  }
+  async createSchool(s: InsertSchool) {
+    return db.insert(schools).values({ ...s, published: false, hasDraft: true, createdAt: now(), updatedAt: now() } as any).returning().get();
+  }
+  async updateSchool(id: number, s: Partial<InsertSchool>) {
+    return db.update(schools).set({ ...s, hasDraft: true, updatedAt: now() } as any).where(eq(schools.id, id)).returning().get();
+  }
+  async publishSchool(id: number) {
+    const s = await db.select().from(schools).where(eq(schools.id, id)).get();
+    if (!s) return undefined;
+    return db.update(schools).set({ published: true, hasDraft: false, publishedSnapshot: JSON.stringify(s), updatedAt: now() } as any).where(eq(schools.id, id)).returning().get();
+  }
+  async deleteSchool(id: number) { db.delete(schools).where(eq(schools.id, id)).run(); }
+
+  async listStays(spotId: number, publishedOnly: boolean) {
+    const all = db.select().from(stays).where(eq(stays.spotId, spotId)).all();
+    return publishedOnly ? all.filter(s => s.published) : all;
+  }
+  async createStay(s: InsertStay) {
+    return db.insert(stays).values({ ...s, published: false, hasDraft: true, createdAt: now(), updatedAt: now() } as any).returning().get();
+  }
+  async updateStay(id: number, s: Partial<InsertStay>) {
+    return db.update(stays).set({ ...s, hasDraft: true, updatedAt: now() } as any).where(eq(stays.id, id)).returning().get();
+  }
+  async publishStay(id: number) {
+    const s = await db.select().from(stays).where(eq(stays.id, id)).get();
+    if (!s) return undefined;
+    return db.update(stays).set({ published: true, hasDraft: false, publishedSnapshot: JSON.stringify(s), updatedAt: now() } as any).where(eq(stays.id, id)).returning().get();
+  }
+  async deleteStay(id: number) { db.delete(stays).where(eq(stays.id, id)).run(); }
+
   async listFilterDefs(publicOnly: boolean) {
     const all = db.select().from(filterDefs).all();
     const list = publicOnly ? all.filter(f => f.isPublic) : all;
@@ -140,6 +295,18 @@ export class DatabaseStorage implements IStorage {
     const existing = db.select().from(filterDefs).where(eq(filterDefs.key, f.key)).get();
     if (existing) return db.update(filterDefs).set(f).where(eq(filterDefs.id, existing.id)).returning().get();
     return db.insert(filterDefs).values(f).returning().get();
+  }
+
+  async getSitePageBySlug(slug: string) {
+    return db.select().from(sitePages).where(eq(sitePages.slug, slug)).get();
+  }
+
+  async upsertSitePage(page: InsertSitePage) {
+    const existing = db.select().from(sitePages).where(eq(sitePages.slug, page.slug)).get();
+    if (existing) {
+      return db.update(sitePages).set({ ...page, updatedAt: now() } as any).where(eq(sitePages.id, existing.id)).returning().get();
+    }
+    return db.insert(sitePages).values({ ...page, createdAt: now(), updatedAt: now() } as any).returning().get();
   }
 }
 

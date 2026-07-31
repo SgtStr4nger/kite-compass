@@ -13,10 +13,27 @@ import placeholderSpot from "@/assets/placeholder-spot.jpg";
 
 const PLACEHOLDER = placeholderSpot;
 
-function scoreFor(spot: SpotDetailT, month: string) {
-  const rec = spot.monthly.find(m => m.month === month);
-  if (!rec) return null;
-  return spot.rankingMode === "auto" ? rec.automaticWindScore : rec.manualScore;
+function clamp01(value: number) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function normalize(value: number, min: number, max: number) {
+  if (max <= min) return 0;
+  return clamp01((value - min) / (max - min));
+}
+
+function weatherScore(rec: MonthlyRecord) {
+  const wind = rec.avgKiteableWind10mKnots ?? rec.averageBaseWind;
+  const days = rec.kiteableDaysCount ?? rec.windDays;
+  const hours = rec.avgKiteableHoursPerDay;
+  const parts: { value: number; weight: number }[] = [];
+  if (wind != null && Number.isFinite(wind)) parts.push({ value: normalize(wind, 12, 25), weight: 0.5 });
+  if (days != null && Number.isFinite(days)) parts.push({ value: normalize(days, 3, 20), weight: 0.3 });
+  if (hours != null && Number.isFinite(hours)) parts.push({ value: normalize(hours, 1, 6), weight: 0.2 });
+  if (parts.length === 0) return null;
+  const totalWeight = parts.reduce((sum, part) => sum + part.weight, 0);
+  const weighted = parts.reduce((sum, part) => sum + part.value * part.weight, 0) / totalWeight;
+  return Math.round(weighted * 100) / 10;
 }
 
 export default function SpotDetail() {
@@ -33,11 +50,9 @@ export default function SpotDetail() {
   const activeRec = useMemo(() => {
     if (!spot) return null;
     if (selectedMonth) return spot.monthly.find(m => m.month === selectedMonth) ?? null;
-    // otherwise the best-scoring month
+    // otherwise the best weather-scoring month
     const scored = [...spot.monthly].sort((a, b) => {
-      const sa = spot.rankingMode === "auto" ? a.automaticWindScore : a.manualScore;
-      const sb = spot.rankingMode === "auto" ? b.automaticWindScore : b.manualScore;
-      return (sb ?? -1) - (sa ?? -1);
+      return ((b.automaticWindScore ?? weatherScore(b)) ?? -1) - ((a.automaticWindScore ?? weatherScore(a)) ?? -1);
     });
     return scored[0] ?? null;
   }, [spot, selectedMonth]);
@@ -60,9 +75,7 @@ export default function SpotDetail() {
   const monthlySorted = MONTHS
     .map(m => spot.monthly.find(r => r.month === m))
     .filter(Boolean) as SpotDetailT["monthly"];
-  const activeScore = activeRec
-    ? (spot.rankingMode === "auto" ? activeRec.automaticWindScore : activeRec.manualScore)
-    : null;
+  const activeScore = activeRec ? (activeRec.automaticWindScore ?? weatherScore(activeRec)) : null;
 
   return (
     <SiteLayout>
@@ -117,7 +130,6 @@ export default function SpotDetail() {
               {spot.spotTypes.map(t => <Chip key={t}>{tagLabel(t)}</Chip>)}
               {spot.riderLevels.map(t => <Chip key={t}>{tagLabel(t)}</Chip>)}
               {spot.vibeTags.map(t => <Chip key={t}>{tagLabel(t)}</Chip>)}
-              {spot.beginnerFriendly && <Chip>Beginner friendly</Chip>}
             </div>
 
             {spot.destinationDescription && (
@@ -131,6 +143,25 @@ export default function SpotDetail() {
               <section>
                 <h2 className="font-serif text-2xl font-semibold text-foreground">Kiting conditions</h2>
                 <p className="mt-3 whitespace-pre-line leading-relaxed text-foreground/80">{spot.kiteContextDescription}</p>
+              </section>
+            )}
+
+            {(spot.schools.length > 0 || spot.stays.length > 0) && (
+              <section className="grid gap-6 md:grid-cols-2">
+                {spot.schools.length > 0 && (
+                  <LinkedGroup title="Schools" items={spot.schools.map(s => ({
+                    name: s.name,
+                    note: [s.offersLessons ? "Lessons" : null, s.offersRental ? "Rental" : null].filter(Boolean).join(" · "),
+                    href: s.websiteUrl || s.mapUrl || undefined,
+                  }))} />
+                )}
+                {spot.stays.length > 0 && (
+                  <LinkedGroup title="Stays" items={spot.stays.map(s => ({
+                    name: s.name,
+                    note: [s.type || null, s.notes || null].filter(Boolean).join(" · "),
+                    href: s.websiteUrl || s.mapUrl || undefined,
+                  }))} />
+                )}
               </section>
             )}
 
@@ -149,14 +180,14 @@ export default function SpotDetail() {
                 </div>
                 <dl className="space-y-3 text-sm">
                   {(() => {
-                    const avgWind = activeRec.avgWind10mKnots ?? activeRec.averageBaseWind;
-                    const gust = activeRec.maxWind10mKnots ?? activeRec.gusts;
-                    const windyDays = activeRec.windyDaysCount ?? activeRec.windDays;
+                    const avgWind = activeRec.avgKiteableWind10mKnots ?? activeRec.averageBaseWind;
+                    const windyDays = activeRec.kiteableDaysCount ?? activeRec.windDays;
+                    const kiteHours = activeRec.avgKiteableHoursPerDay;
                     return (
                       <>
-                        <Metric icon={Wind} label="Average wind" value={avgWind != null ? `${avgWind} kn` : "—"} />
-                        <Metric icon={Gauge} label="Gusts (typical)" value={gust != null ? `${gust} kn` : "—"} />
-                        <Metric icon={CalendarDays} label="Windy days" value={windyDays != null ? `${windyDays} / month` : "—"} />
+                        <Metric icon={Wind} label="Average kiteable wind" value={avgWind != null ? `${avgWind} kn` : "—"} />
+                        <Metric icon={CalendarDays} label="Kiteable days" value={windyDays != null ? `${windyDays} / month` : "—"} />
+                        <Metric icon={Gauge} label="Kiteable hours/day" value={kiteHours != null ? `${kiteHours} h` : "—"} />
                         {activeRec.avgWaveHeightM != null && (
                           <Metric icon={Waves} label="Avg wave" value={`${activeRec.avgWaveHeightM} m`} />
                         )}
@@ -238,6 +269,25 @@ function Metric({ icon: Icon, label, value }: { icon: any; label: string; value:
   );
 }
 
+function LinkedGroup({ title, items }: { title: string; items: { name: string; note: string; href?: string }[] }) {
+  return (
+    <div className="rounded-2xl border border-card-border bg-card p-5">
+      <h2 className="font-serif text-2xl font-semibold text-foreground">{title}</h2>
+      <div className="mt-4 space-y-3">
+        {items.map(item => (
+          <div key={item.name} className="rounded-xl border border-border p-4">
+            <div className="font-medium text-foreground">{item.name}</div>
+            {item.note && <div className="mt-1 text-sm text-muted-foreground">{item.note}</div>}
+            {item.href && (
+              <a href={item.href} target="_blank" rel="noopener noreferrer" className="mt-2 inline-block text-sm font-medium text-primary no-underline">Open</a>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── "When it works best" — season strip + two sparklines + 12-month table ──
 function WhenItWorksBest({ monthly, selectedMonth }: { monthly: MonthlyRecord[]; selectedMonth: string | null }) {
   // Always render all 12 months in fixed Jan–Dec order; missing months show as gaps.
@@ -245,8 +295,8 @@ function WhenItWorksBest({ monthly, selectedMonth }: { monthly: MonthlyRecord[];
   const rows = MONTHS.map(m => byMonth.get(m) ?? null);
   const hasAny = monthly.length > 0;
 
-  const windSeries = rows.map(r => (r?.avgWind10mKnots ?? r?.averageBaseWind ?? null));
-  const windyDaySeries = rows.map(r => (r?.windyDaysCount ?? r?.windDays ?? null));
+  const windSeries = rows.map(r => (r?.avgKiteableWind10mKnots ?? r?.averageBaseWind ?? null));
+  const windyDaySeries = rows.map(r => (r?.kiteableDaysCount ?? r?.windDays ?? null));
   const hasWaves = monthly.some(m => m.avgWaveHeightM != null);
   const hasWavePeriod = monthly.some(m => m.avgWavePeriodS != null);
 
@@ -286,7 +336,7 @@ function WhenItWorksBest({ monthly, selectedMonth }: { monthly: MonthlyRecord[];
         </div>
         {/* legend */}
         <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1">
-          {(["peak", "good", "okay", "off"] as const).map(k => (
+          {(["peak", "side", "off"] as const).map(k => (
             <span key={k} className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <span className={`h-2.5 w-2.5 rounded-sm ${SEASON_META[k].dot}`} /> {SEASON_META[k].label}
             </span>
@@ -297,13 +347,13 @@ function WhenItWorksBest({ monthly, selectedMonth }: { monthly: MonthlyRecord[];
       {/* Two sparklines — avg wind, windy days */}
       <div className="mt-6 grid gap-4 sm:grid-cols-2">
         <SparkCard
-          label="Average wind through the year"
+          label="Average kiteable wind through the year"
           summary={peakWind != null ? `up to ${peakWind} kn` : "—"}
           series={windSeries}
           unit="kn"
         />
         <SparkCard
-          label="Windy days through the year"
+          label="Kiteable days through the year"
           summary={peakWindyDays != null ? `up to ${peakWindyDays} / mo` : "—"}
           series={windyDaySeries}
           unit="days"
@@ -317,8 +367,9 @@ function WhenItWorksBest({ monthly, selectedMonth }: { monthly: MonthlyRecord[];
             <tr>
               <th className="px-4 py-3 font-medium">Month</th>
               <th className="px-4 py-3 font-medium">Season</th>
-              <th className="px-4 py-3 text-right font-medium">Avg wind</th>
-              <th className="px-4 py-3 text-right font-medium">Windy days</th>
+              <th className="px-4 py-3 text-right font-medium">Kiteable wind</th>
+              <th className="px-4 py-3 text-right font-medium">Kiteable days</th>
+              <th className="px-4 py-3 text-right font-medium">Hours/day</th>
               {hasWaves && <th className="px-4 py-3 text-right font-medium">Avg wave</th>}
               {hasWavePeriod && <th className="px-4 py-3 text-right font-medium">Wave period</th>}
             </tr>
@@ -327,7 +378,7 @@ function WhenItWorksBest({ monthly, selectedMonth }: { monthly: MonthlyRecord[];
             {MONTHS.map((m, i) => {
               const r = rows[i];
               const on = selectedMonth === m;
-              const cols = 4 + (hasWaves ? 1 : 0) + (hasWavePeriod ? 1 : 0);
+              const cols = 5 + (hasWaves ? 1 : 0) + (hasWavePeriod ? 1 : 0);
               if (!r) {
                 return (
                   <tr key={m} className="border-t border-border text-muted-foreground/70">
@@ -336,14 +387,16 @@ function WhenItWorksBest({ monthly, selectedMonth }: { monthly: MonthlyRecord[];
                   </tr>
                 );
               }
-              const avgWind = r.avgWind10mKnots ?? r.averageBaseWind;
-              const windyDays = r.windyDaysCount ?? r.windDays;
+              const avgWind = r.avgKiteableWind10mKnots ?? r.averageBaseWind;
+              const windyDays = r.kiteableDaysCount ?? r.windDays;
+              const kiteHours = r.avgKiteableHoursPerDay;
               return (
                 <tr key={m} className={`border-t border-border ${on ? "bg-accent/10" : ""}`} data-testid={`row-month-${m}`}>
                   <td className="px-4 py-3 font-medium text-foreground">{m}</td>
                   <td className="px-4 py-3"><SeasonBadge label={r.seasonLabel} /></td>
                   <td className="px-4 py-3 text-right tabular-nums">{avgWind != null ? `${avgWind} kn` : "—"}</td>
                   <td className="px-4 py-3 text-right tabular-nums">{windyDays != null ? windyDays : "—"}</td>
+                  <td className="px-4 py-3 text-right tabular-nums">{kiteHours != null ? `${kiteHours} h` : "—"}</td>
                   {hasWaves && <td className="px-4 py-3 text-right tabular-nums">{r.avgWaveHeightM != null ? `${r.avgWaveHeightM} m` : "—"}</td>}
                   {hasWavePeriod && <td className="px-4 py-3 text-right tabular-nums">{r.avgWavePeriodS != null ? `${r.avgWavePeriodS} s` : "—"}</td>}
                 </tr>

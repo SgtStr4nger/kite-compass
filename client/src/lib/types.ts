@@ -9,9 +9,9 @@ export interface MonthlyRecord {
   windDays: number | null;
   seasonLabel: string; // peak|good|okay|off
   // Open-Meteo enriched metrics (wind in knots, waves in metres, period in seconds)
-  avgWind10mKnots: number | null;
-  maxWind10mKnots: number | null;
-  windyDaysCount: number | null;
+  avgKiteableWind10mKnots: number | null;
+  kiteableDaysCount: number | null;
+  avgKiteableHoursPerDay: number | null;
   avgWaveHeightM: number | null;
   maxWaveHeightM: number | null;
   avgWavePeriodS: number | null;
@@ -23,8 +23,45 @@ export interface MonthlyRecord {
   hasDraft: boolean;
 }
 
+export interface School {
+  id: number;
+  spotId: number;
+  name: string;
+  websiteUrl: string;
+  mapUrl: string;
+  offersRental: boolean;
+  offersLessons: boolean;
+  notes: string;
+  favorite: boolean;
+  published: boolean;
+  hasDraft: boolean;
+}
+
+export interface Stay {
+  id: number;
+  spotId: number;
+  name: string;
+  type: string;
+  websiteUrl: string;
+  mapUrl: string;
+  notes: string;
+  favorite: boolean;
+  published: boolean;
+  hasDraft: boolean;
+}
+
+export interface SitePage {
+  id: number;
+  slug: string;
+  title: string;
+  body: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface Spot {
   id: number;
+  publicId: string;
   slug: string;
   name: string;
   country: string;
@@ -53,6 +90,10 @@ export interface Spot {
   internalNotes: string;
   sourceNotes: string;
   rankingMode: string; // manual|auto
+  createdAt?: string;
+  updatedAt?: string;
+  dataStatus?: "fresh" | "dirty" | "missing";
+  dataNeedsRefresh?: boolean;
   published: boolean;
   hasDraft: boolean;
 }
@@ -67,6 +108,8 @@ export interface SpotListItem extends Spot {
 
 export interface SpotDetail extends Spot {
   monthly: MonthlyRecord[];
+  schools: School[];
+  stays: Stay[];
 }
 
 export interface AdminSpotListItem extends Spot {
@@ -90,10 +133,9 @@ export const MONTHS = [
 ];
 
 export const SEASON_META: Record<string, { label: string; color: string; dot: string }> = {
-  peak: { label: "Peak season", color: "text-emerald-800 bg-emerald-100", dot: "bg-emerald-500" },
-  good: { label: "Good", color: "text-teal-800 bg-teal-100", dot: "bg-teal-500" },
-  okay: { label: "Okay", color: "text-amber-800 bg-amber-100", dot: "bg-amber-500" },
-  off: { label: "Off season", color: "text-stone-600 bg-stone-200", dot: "bg-stone-400" },
+  peak: { label: "Peak", color: "text-emerald-900 bg-emerald-100", dot: "bg-emerald-600" },
+  side: { label: "Side", color: "text-sky-900 bg-sky-100", dot: "bg-sky-500" },
+  off: { label: "Off", color: "text-stone-700 bg-stone-200", dot: "bg-stone-400" },
 };
 
 export function tagLabel(t: string): string {

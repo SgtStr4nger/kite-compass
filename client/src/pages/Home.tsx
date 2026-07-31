@@ -2,11 +2,12 @@ import { useState, useMemo } from "react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { SiteLayout } from "@/components/SiteChrome";
-import { MonthSelect } from "@/components/Filters";
+import { MonthPicker } from "@/components/Filters";
 import { FilterState, emptyFilters } from "@/components/Filters";
 import { filtersToParams } from "@/lib/filterParams";
 import { SpotMap, MapPoint } from "@/components/SpotMap";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Search, Wind, Compass, Waves } from "lucide-react";
 import heroImg from "@/assets/hero.jpg";
 import { SpotListItem, MONTHS, tagLabel } from "@/lib/types";
@@ -15,10 +16,9 @@ const QUICK_TYPES = ["flat-water", "waves", "freestyle", "foil"];
 
 export default function Home() {
   const [, navigate] = useLocation();
-  const [month, setMonth] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [months, setMonths] = useState<string[]>([]);
   const [types, setTypes] = useState<string[]>([]);
-  const [beginner, setBeginner] = useState(false);
-  const [err, setErr] = useState(false);
 
   const { data: allSpots } = useQuery<SpotListItem[]>({ queryKey: ["/api/spots"] });
 
@@ -29,9 +29,9 @@ export default function Home() {
   [allSpots]);
 
   const search = () => {
-    if (!month) { setErr(true); return; }
-    const f: FilterState = { ...emptyFilters, month, spotType: types, beginner };
-    navigate(`/results?${filtersToParams(f).toString()}`);
+    const f: FilterState = { ...emptyFilters, query, months, spotType: types };
+    const qs = filtersToParams(f).toString();
+    navigate(`/results${qs ? `?${qs}` : ""}`);
   };
 
   const toggleType = (t: string) =>
@@ -61,13 +61,11 @@ export default function Home() {
 
           {/* Search card */}
           <div className="mx-auto mt-9 max-w-3xl rounded-2xl border border-white/40 bg-background/95 p-4 text-left shadow-2xl backdrop-blur md:p-6">
-            <div className="flex flex-col gap-3 md:flex-row md:items-end">
-              <div className="flex-1">
-                <label htmlFor="hero-month" className="mb-1.5 block text-sm font-medium text-foreground">
-                  When do you want to go? <span className="text-accent">*</span>
-                </label>
-                <MonthSelect id="hero-month" value={month} required onChange={(m) => { setMonth(m); setErr(false); }} />
-                {err && <p className="mt-1.5 text-sm text-destructive" data-testid="text-month-error">Please choose a month to start your search.</p>}
+            <div className="grid gap-4 md:grid-cols-[1fr_1fr_auto] md:items-end">
+              <MonthPicker value={months} onChange={setMonths} label="When do you want to go?" />
+              <div>
+                <label className="mb-2 block text-sm font-medium text-foreground">Where do you want to go?</label>
+                <Input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search by spot, region or country" data-testid="input-hero-search" />
               </div>
               <Button size="lg" onClick={search} className="h-11 gap-2 md:w-auto" data-testid="button-hero-search">
                 <Search className="h-4 w-4" /> Find spots
@@ -91,16 +89,6 @@ export default function Home() {
                     {tagLabel(t)}
                   </button>
                 ))}
-                <button
-                  type="button"
-                  onClick={() => setBeginner(b => !b)}
-                  data-testid="quick-beginner"
-                  className={`rounded-full border px-3 py-1 text-sm transition-colors ${
-                    beginner ? "border-primary bg-primary text-primary-foreground" : "border-border bg-background text-foreground/80 hover-elevate"
-                  }`}
-                >
-                  Beginner friendly
-                </button>
               </div>
             </div>
           </div>
@@ -112,7 +100,7 @@ export default function Home() {
         <div className="grid gap-8 md:grid-cols-3">
           {[
             { icon: Wind, title: "Wind you can trust", body: "Every spot carries average and gust wind ranges plus typical wind-day counts for each month of the year." },
-            { icon: Waves, title: "Conditions that fit you", body: "Filter by flat water, waves, chop or foil-friendly lagoons, and by whether a spot suits beginners or advanced riders." },
+            { icon: Waves, title: "Conditions that fit you", body: "Filter by flat water, waves, chop or foil-friendly lagoons, and by rider level." },
             { icon: Compass, title: "The right time to travel", body: "A single Kite Compass score per month makes it easy to compare destinations and time your trip perfectly." },
           ].map(({ icon: Icon, title, body }) => (
             <div key={title} className="rounded-2xl border border-card-border bg-card p-6">
@@ -132,7 +120,7 @@ export default function Home() {
           <div>
             <h2 className="font-serif text-2xl font-semibold text-foreground">Spots around the world</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              {mapPoints.length} destinations mapped. Pick a month above to rank them.
+              {mapPoints.length} destinations mapped. Choose one or more months to rank them, or search without months to browse all spots.
             </p>
           </div>
           <Button variant="outline" onClick={() => navigate("/results")} data-testid="button-browse-all" className="hidden sm:inline-flex">
