@@ -120,6 +120,18 @@ export default function AdminSpotEditor() {
     toast({ title: "Spot published" });
   };
 
+  const deleteSpot = async () => {
+    if (!savedId) return;
+    if (!window.confirm(`Move "${form.name || "this spot"}" to Trash? It will be permanently deleted after 30 days.`)) return;
+    try {
+      await api("DELETE", `/api/admin/spots/${savedId}`);
+      toast({ title: "Spot moved to Trash" });
+      navigate("/admin/spots");
+    } catch (e: any) {
+      toast({ title: "Delete failed", description: String(e.message || e), variant: "destructive" });
+    }
+  };
+
   // ── Weather enrichment (Open-Meteo, Pattern B: explicit admin action) ──
   const [enriching, setEnriching] = useState(false);
   const hasCoords = form.latitude != null && form.longitude != null;
@@ -227,6 +239,11 @@ export default function AdminSpotEditor() {
           <ArrowLeft className="h-4 w-4" /> All spots
         </button>
         <div className="flex items-center gap-2">
+          {savedId && (
+            <Button variant="ghost" size="icon" onClick={deleteSpot} disabled={busy} title="Move to Trash" className="text-muted-foreground hover:text-destructive" data-testid="button-delete-spot">
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          )}
           <Button variant="outline" onClick={exportSpot} disabled={busy} className="gap-2" data-testid="button-export-spot"><Upload className="h-4 w-4" /> Export</Button>
           <Button variant="outline" onClick={preview} disabled={busy || !form.name} className="gap-2" data-testid="button-preview"><Eye className="h-4 w-4" /> Preview</Button>
           <Button variant="outline" onClick={saveSpot} disabled={busy} className="gap-2" data-testid="button-save-draft"><Save className="h-4 w-4" /> Save draft</Button>

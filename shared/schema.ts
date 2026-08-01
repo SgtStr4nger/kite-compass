@@ -82,6 +82,8 @@ export const spots = sqliteTable("spots", {
   published: integer("published", { mode: "boolean" }).default(false),
   hasDraft: integer("has_draft", { mode: "boolean" }).default(true),
   publishedSnapshot: text("published_snapshot"), // JSON of last published version
+  // soft delete (30-day restorable)
+  deletedAt: text("deleted_at"),
   createdAt: text("created_at"),
   updatedAt: text("updated_at"),
 });
@@ -153,6 +155,8 @@ export const schools = sqliteTable("schools", {
   published: integer("published", { mode: "boolean" }).default(false),
   hasDraft: integer("has_draft", { mode: "boolean" }).default(true),
   publishedSnapshot: text("published_snapshot"),
+  // soft delete (30-day restorable)
+  deletedAt: text("deleted_at"),
   createdAt: text("created_at"),
   updatedAt: text("updated_at"),
 });
@@ -180,6 +184,8 @@ export const stays = sqliteTable("stays", {
   published: integer("published", { mode: "boolean" }).default(false),
   hasDraft: integer("has_draft", { mode: "boolean" }).default(true),
   publishedSnapshot: text("published_snapshot"),
+  // soft delete (30-day restorable)
+  deletedAt: text("deleted_at"),
   createdAt: text("created_at"),
   updatedAt: text("updated_at"),
 });

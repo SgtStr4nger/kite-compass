@@ -22,6 +22,7 @@ import AdminListingsSchools from "@/pages/admin/AdminListingsSchools";
 import AdminListingsStays from "@/pages/admin/AdminListingsStays";
 import AdminUsers from "@/pages/admin/AdminUsers";
 import AdminSEO from "@/pages/admin/AdminSEO";
+import AdminTrash from "@/pages/admin/AdminTrash";
 
 function AppRouter() {
   return (
@@ -44,6 +45,7 @@ function AppRouter() {
       <Route path="/admin/spots/:id" component={AdminSpotEditor} />
       <Route path="/admin/listings/schools" component={AdminListingsSchools} />
       <Route path="/admin/listings/stays" component={AdminListingsStays} />
+      <Route path="/admin/trash" component={AdminTrash} />
       <Route component={NotFound} />
     </Switch>
   );

@@ -274,6 +274,25 @@ export interface ExcelImportHistoryItem {
   updated_at: string | null;
 }
 
+export interface TrashItem {
+  category: "spots" | "schools" | "stays";
+  id: number;
+  name: string;
+  deletedAt: string;
+  daysRemaining: number;
+  expiresAt: string;
+}
+
+export interface RestoreInfo {
+  category: "spots" | "schools" | "stays";
+  id: number;
+  name: string;
+  totalAssignments: number;
+  recoverableAssignments: number;
+  unrecoverableAssignments: number;
+  affectedItems: Array<{ id: number; name: string; recoverable: boolean }>;
+}
+
 export const MONTHS = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",

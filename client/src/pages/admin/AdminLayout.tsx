@@ -3,7 +3,7 @@ import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { CompassMark } from "@/components/Logo";
 import { Button } from "@/components/ui/button";
-import { LogOut, LayoutGrid, Database, FileText, ExternalLink, School, Hotel, Users, Search } from "lucide-react";
+import { LogOut, LayoutGrid, Database, FileText, ExternalLink, School, Hotel, Users, Search, Trash2 } from "lucide-react";
 import { applyRobotsMetadata } from "@/lib/metadata";
 import { api } from "@/lib/api";
 import { ExcelImportStatus } from "@/lib/types";
@@ -97,6 +97,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
             {navLink("/admin/seo", <Search className="h-4 w-4" />, "SEO", "link-admin-seo")}
             {navLink("/admin/legal", <FileText className="h-4 w-4" />, "Legal", "link-admin-legal")}
             {navLink("/admin/users", <Users className="h-4 w-4" />, "Users", "link-admin-users")}
+            {navLink("/admin/trash", <Trash2 className="h-4 w-4" />, "Trash", "link-admin-trash")}
           </div>
 
           <div className="pt-2">
