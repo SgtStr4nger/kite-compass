@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useEffect } from "react";
 import { useRoute, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -15,6 +15,7 @@ import { getHashSearch } from "@/lib/filterParams";
 import { Wind, Gauge, CalendarDays, MapPin, Plane, ExternalLink, ArrowLeft, Navigation, Waves } from "lucide-react";
 import placeholderSpot from "@/assets/placeholder-spot.jpg";
 import { resolveMonthlyScore } from "@shared/scoring";
+import { applyPageMetadata } from "@/lib/metadata";
 
 const PLACEHOLDER = placeholderSpot;
 
@@ -28,6 +29,33 @@ export default function SpotDetail() {
     queryKey: [`/api/spots/slug/${slug}${preview ? "?preview=1" : ""}`],
     enabled: !!slug,
   });
+
+  useEffect(() => {
+    if (!slug) return;
+    if (!spot) {
+      if (!isLoading) {
+        applyPageMetadata({
+          title: "Spot not found | Kite Compass",
+          description: "This destination is not published or does not exist.",
+          robots: "noindex,nofollow",
+          canonicalPath: "/results",
+        });
+      }
+      return;
+    }
+    const country = spot.country || "Unknown location";
+    const autoTitle = `${spot.name}, ${country} – Kitesurfing Guide | Kite Compass`;
+    const autoDescription = `Explore kitesurfing conditions, seasonality and travel information for ${spot.name}, ${country}.`;
+    const title = spot.seoTitleOverride?.trim() ? spot.seoTitleOverride.trim() : autoTitle;
+    const description = spot.seoDescriptionOverride?.trim() ? spot.seoDescriptionOverride.trim() : autoDescription;
+    applyPageMetadata({
+      title,
+      description,
+      robots: preview ? "noindex,nofollow" : "index,follow",
+      canonicalPath: `/spots/${spot.publishedSlug || spot.slug}`,
+      ogImage: spot.heroImageUrl || PLACEHOLDER,
+    });
+  }, [slug, spot, isLoading, preview]);
 
   const activeRec = useMemo(() => {
     if (!spot) return null;

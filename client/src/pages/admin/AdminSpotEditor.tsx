@@ -11,6 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useToast } from "@/hooks/use-toast";
 import { SpotDetail, MonthlyRecord, MONTHS, tagLabel, School, Stay, SCHOOL_SPORTS, STAY_TYPES } from "@/lib/types";
 import { ArrowLeft, Eye, Save, Trash2, Upload, Plus, CloudDownload, RefreshCw, CheckCircle2, AlertTriangle, CheckCheck, ChevronUp, ChevronDown, Link as LinkIcon } from "lucide-react";
@@ -22,6 +23,18 @@ const SEASONS = ["peak", "side", "off"];
 
 function slugify(s: string) {
   return s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+function automaticSpotSeoTitle(name: string | undefined, country: string | undefined) {
+  const spotName = (name || "").trim() || "Spot";
+  const spotCountry = (country || "").trim() || "Unknown location";
+  return `${spotName}, ${spotCountry} – Kitesurfing Guide | Kite Compass`;
+}
+
+function automaticSpotSeoDescription(name: string | undefined, country: string | undefined) {
+  const spotName = (name || "").trim() || "Spot";
+  const spotCountry = (country || "").trim() || "Unknown location";
+  return `Explore kitesurfing conditions, seasonality and travel information for ${spotName}, ${spotCountry}.`;
 }
 
 type SpotForm = Partial<SpotDetail>;
@@ -46,6 +59,7 @@ export default function AdminSpotEditor() {
     destinationSummary: "", destinationDescription: "", kiteContextDescription: "", teaserText: "",
     heroImageUrl: "", nearestAirportName: "", nearestAirportCode: "", airportTransferTime: "", transportNote: "",
     beginnerFriendly: false, spotTypes: [], riderLevels: [], vibeTags: [],
+    seoTitleOverride: "", seoDescriptionOverride: "",
     sourceNotes: "", internalNotes: "", rankingMode: "auto",
     published: false, hasDraft: true,
   });
@@ -198,6 +212,13 @@ export default function AdminSpotEditor() {
     setMonthly(ms => ms.filter(m => m.id !== mid));
   };
 
+  const autoSeoTitle = automaticSpotSeoTitle(form.name, form.country);
+  const autoSeoDescription = automaticSpotSeoDescription(form.name, form.country);
+  const effectiveSeoTitle = form.seoTitleOverride?.trim() ? form.seoTitleOverride.trim() : autoSeoTitle;
+  const effectiveSeoDescription = form.seoDescriptionOverride?.trim() ? form.seoDescriptionOverride.trim() : autoSeoDescription;
+  const titleWarning = effectiveSeoTitle.length > 60;
+  const descriptionWarning = effectiveSeoDescription.length > 160;
+
   return (
     <AdminLayout>
       {/* header / action bar */}
@@ -235,12 +256,70 @@ export default function AdminSpotEditor() {
           <Field label="Hero image URL" hint="Leave blank to use the default placeholder"><Input value={form.heroImageUrl || ""} onChange={e => set("heroImageUrl", e.target.value)} data-testid="input-hero" /></Field>
         </Section>
 
-        {/* Descriptions */}
-        <Section title="Descriptions">
+        {/* Content */}
+        <Section title="Content">
           <Field label="Teaser" hint="Short line shown on result cards (editable, stored separately)"><Textarea rows={2} value={form.teaserText || ""} onChange={e => set("teaserText", e.target.value)} data-testid="input-teaser" /></Field>
           <Field label="Summary" hint="One-liner at the top of the spot page"><Textarea rows={2} value={form.destinationSummary || ""} onChange={e => set("destinationSummary", e.target.value)} data-testid="input-summary" /></Field>
           <Field label="Destination description"><Textarea rows={4} value={form.destinationDescription || ""} onChange={e => set("destinationDescription", e.target.value)} data-testid="input-destdesc" /></Field>
           <Field label="Kite context description"><Textarea rows={4} value={form.kiteContextDescription || ""} onChange={e => set("kiteContextDescription", e.target.value)} data-testid="input-kitedesc" /></Field>
+
+          <Collapsible defaultOpen={false}>
+            <div className="rounded-xl border border-border">
+              <CollapsibleTrigger className="flex w-full items-center justify-between px-4 py-3 text-left">
+                <div>
+                  <p className="font-medium text-foreground">SEO</p>
+                  <p className="text-xs text-muted-foreground">Optional per-spot overrides for title and description.</p>
+                </div>
+                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+              </CollapsibleTrigger>
+              <CollapsibleContent className="border-t border-border px-4 py-4">
+                <div className="space-y-4">
+                  <Field label="Meta title override" hint={`Automatic: ${autoSeoTitle}`}>
+                    <div className="space-y-2">
+                      <Input
+                        value={form.seoTitleOverride || ""}
+                        onChange={e => set("seoTitleOverride", e.target.value)}
+                        data-testid="input-seo-title-override"
+                      />
+                      <div className="flex items-center justify-between gap-2 text-xs">
+                        <span className="text-muted-foreground">Effective title: {effectiveSeoTitle}</span>
+                        <Button type="button" variant="outline" size="sm" onClick={() => set("seoTitleOverride", "")} data-testid="button-seo-title-reset">
+                          Reset to automatic
+                        </Button>
+                      </div>
+                    </div>
+                  </Field>
+                  {titleWarning ? (
+                    <p className="flex items-center gap-1.5 text-xs text-amber-700" data-testid="text-seo-title-warning">
+                      <AlertTriangle className="h-3.5 w-3.5" /> Title is over ~60 characters (warning only).
+                    </p>
+                  ) : null}
+
+                  <Field label="Meta description override" hint={`Automatic: ${autoSeoDescription}`}>
+                    <div className="space-y-2">
+                      <Textarea
+                        rows={3}
+                        value={form.seoDescriptionOverride || ""}
+                        onChange={e => set("seoDescriptionOverride", e.target.value)}
+                        data-testid="input-seo-description-override"
+                      />
+                      <div className="flex items-center justify-between gap-2 text-xs">
+                        <span className="text-muted-foreground">Effective description: {effectiveSeoDescription}</span>
+                        <Button type="button" variant="outline" size="sm" onClick={() => set("seoDescriptionOverride", "")} data-testid="button-seo-description-reset">
+                          Reset to automatic
+                        </Button>
+                      </div>
+                    </div>
+                  </Field>
+                  {descriptionWarning ? (
+                    <p className="flex items-center gap-1.5 text-xs text-amber-700" data-testid="text-seo-description-warning">
+                      <AlertTriangle className="h-3.5 w-3.5" /> Description is over ~160 characters (warning only).
+                    </p>
+                  ) : null}
+                </div>
+              </CollapsibleContent>
+            </div>
+          </Collapsible>
         </Section>
 
         {/* Import / export */}

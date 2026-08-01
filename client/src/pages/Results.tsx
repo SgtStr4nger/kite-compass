@@ -10,8 +10,10 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
-import { SpotListItem, FilterDef, SEASON_META } from "@/lib/types";
+import { SpotListItem, FilterDef, SEASON_META, PublicSeoState } from "@/lib/types";
 import { SlidersHorizontal, MapIcon, List, Compass, Info } from "lucide-react";
+import { applyPageMetadata } from "@/lib/metadata";
+import heroImg from "@/assets/hero.jpg";
 
 export default function Results() {
   const [, navigate] = useLocation();
@@ -31,9 +33,21 @@ export default function Results() {
   const queryString = filtersToParams(filters).toString();
   const { data: defs = [] } = useQuery<FilterDef[]>({ queryKey: ["/api/filters"] });
   const { data: countries = [] } = useQuery<string[]>({ queryKey: ["/api/countries"] });
+  const { data: seo } = useQuery<PublicSeoState>({ queryKey: ["/api/seo"] });
   const { data: spots, isLoading } = useQuery<SpotListItem[]>({
     queryKey: [`/api/spots?${queryString}`],
   });
+
+  useEffect(() => {
+    const isFiltered = queryString.length > 0;
+    applyPageMetadata({
+      title: seo?.exploreTitle ?? "Explore Kitesurf Spots by Month | Kite Compass",
+      description: seo?.exploreDescription ?? "Browse and compare kitesurf spots worldwide. Filter by season, conditions and travel vibe to find your next trip.",
+      robots: isFiltered ? "noindex,nofollow" : "index,follow",
+      canonicalPath: "/results",
+      ogImage: heroImg,
+    });
+  }, [queryString, seo]);
 
   const points: MapPoint[] = useMemo(() =>
     (spots ?? [])

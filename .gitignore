@@ -18,3 +18,4 @@ Kite-Compas - specs v1.txt
 .github/instructions/perplexity-mcp.instructions.md
 WORK_PACKAGE_PLAN.md
 .gitignore
+run_server.bat

@@ -23,6 +23,7 @@ export interface MonthlyRecord {
   internalNotes: string;
   published: boolean;
   hasDraft: boolean;
+  publishedSlug?: string;
 }
 
 export interface School {
@@ -89,6 +90,35 @@ export interface LegalAdminState {
   legalNotice: LegalPageConfig;
 }
 
+export interface PublicSeoState {
+  homepageTitle: string;
+  homepageDescription: string;
+  exploreTitle: string;
+  exploreDescription: string;
+  methodologyTitle: string;
+  methodologyDescription: string;
+  updatedAt: string | null;
+}
+
+export interface SeoAdminState {
+  homepageTitleDraft: string;
+  homepageDescriptionDraft: string;
+  exploreTitleDraft: string;
+  exploreDescriptionDraft: string;
+  methodologyTitleDraft: string;
+  methodologyDescriptionDraft: string;
+  homepageTitlePublished: string;
+  homepageDescriptionPublished: string;
+  exploreTitlePublished: string;
+  exploreDescriptionPublished: string;
+  methodologyTitlePublished: string;
+  methodologyDescriptionPublished: string;
+  hasDraft: boolean;
+  publishedAt: string | null;
+  updatedAt: string | null;
+  canPublish: boolean;
+}
+
 export interface AdminUser {
   id: number;
   email: string;
@@ -133,6 +163,8 @@ export interface Spot {
   waterStates: string[];
   internalNotes: string;
   sourceNotes: string;
+  seoTitleOverride: string;
+  seoDescriptionOverride: string;
   rankingMode: string; // manual|auto
   createdAt?: string;
   updatedAt?: string;
@@ -140,6 +172,7 @@ export interface Spot {
   dataNeedsRefresh?: boolean;
   published: boolean;
   hasDraft: boolean;
+  publishedSlug?: string;
 }
 
 export interface SpotListItem extends Spot {
