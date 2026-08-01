@@ -6,7 +6,7 @@ import { AdminLayout } from "./AdminLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Stay, ListingsPage, STAY_TYPES, AdminSpotListItem, ExcelImportAction, ExcelImportHistoryItem, ExcelImportPreviewResponse } from "@/lib/types";
-import { Plus, ChevronUp, ChevronDown, Check, X, Globe, Map } from "lucide-react";
+import { Plus, ChevronUp, ChevronDown, Check, X, Globe, Map, Trash2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 type StayRow = Stay & { assignedSpotsCount: number };
@@ -190,6 +190,17 @@ export default function AdminListingsStays() {
     await loadHistory();
   };
 
+  const deleteStay = async (id: number, name: string) => {
+    if (!window.confirm(`Move "${name}" to Trash? It will be permanently deleted after 30 days.`)) return;
+    try {
+      await api("DELETE", `/api/admin/listings/stays/${id}`);
+      toast({ title: "Stay moved to Trash" });
+      pushState({ ...state });
+    } catch (e: any) {
+      toast({ title: "Delete failed", description: String(e.message || e), variant: "destructive" });
+    }
+  };
+
   const SortHeader = ({ col, label }: { col: string; label: string }) => (
     <button
       onClick={() =>
@@ -330,7 +341,12 @@ export default function AdminListingsStays() {
                 </td>
                 <td className="px-4 py-3 text-muted-foreground text-xs">{stay.updatedAt ? new Date(stay.updatedAt).toLocaleDateString() : "—"}</td>
                 <td className="px-4 py-3">
-                  {!stay.published && <Button size="sm" variant="outline" onClick={() => void publishStay(stay.id)}>Publish</Button>}
+                  <div className="flex items-center gap-1">
+                    {!stay.published && <Button size="sm" variant="outline" onClick={() => void publishStay(stay.id)}>Publish</Button>}
+                    <Button size="sm" variant="ghost" onClick={() => void deleteStay(stay.id, stay.name)} title="Move to Trash" className="text-muted-foreground hover:text-destructive">
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </td>
               </tr>
             ))}

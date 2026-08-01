@@ -8,7 +8,7 @@ import type {
 } from '@shared/schema';
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, isNull } from "drizzle-orm";
 import crypto from "node:crypto";
 
 export const sqlite = new Database("data.db");
@@ -38,6 +38,7 @@ ensureColumns("spots", [
   { name: "weather_has_manual_changes", ddl: "weather_has_manual_changes INTEGER DEFAULT 0" },
   { name: "seo_title_override", ddl: "seo_title_override TEXT DEFAULT ''" },
   { name: "seo_description_override", ddl: "seo_description_override TEXT DEFAULT ''" },
+  { name: "deleted_at", ddl: "deleted_at TEXT" },
 ]);
 ensureColumns("monthly_records", [
   { name: "avg_kiteable_wind_10m_knots", ddl: "avg_kiteable_wind_10m_knots REAL" },
@@ -266,6 +267,36 @@ function migrateAssignmentTables() {
   }
 }
 migrateAssignmentTables();
+
+ensureColumns("schools", [
+  { name: "deleted_at", ddl: "deleted_at TEXT" },
+]);
+ensureColumns("stays", [
+  { name: "deleted_at", ddl: "deleted_at TEXT" },
+]);
+
+// Permanently remove soft-deleted records that are older than 30 days.
+function purgeExpiredDeleted() {
+  const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const expiredSpots = sqlite.prepare(`SELECT id FROM spots WHERE deleted_at IS NOT NULL AND deleted_at < ?`).all(cutoff) as { id: number }[];
+  for (const s of expiredSpots) {
+    sqlite.prepare(`DELETE FROM monthly_records WHERE spot_id = ?`).run(s.id);
+    sqlite.prepare(`DELETE FROM spot_schools WHERE spot_id = ?`).run(s.id);
+    sqlite.prepare(`DELETE FROM spot_stays WHERE spot_id = ?`).run(s.id);
+    sqlite.prepare(`DELETE FROM spots WHERE id = ?`).run(s.id);
+  }
+  const expiredSchools = sqlite.prepare(`SELECT id FROM schools WHERE deleted_at IS NOT NULL AND deleted_at < ?`).all(cutoff) as { id: number }[];
+  for (const s of expiredSchools) {
+    sqlite.prepare(`DELETE FROM spot_schools WHERE school_id = ?`).run(s.id);
+    sqlite.prepare(`DELETE FROM schools WHERE id = ?`).run(s.id);
+  }
+  const expiredStays = sqlite.prepare(`SELECT id FROM stays WHERE deleted_at IS NOT NULL AND deleted_at < ?`).all(cutoff) as { id: number }[];
+  for (const s of expiredStays) {
+    sqlite.prepare(`DELETE FROM spot_stays WHERE stay_id = ?`).run(s.id);
+    sqlite.prepare(`DELETE FROM stays WHERE id = ?`).run(s.id);
+  }
+}
+purgeExpiredDeleted();
 
 ensureColumns("site_pages", [
   { name: "slug", ddl: "slug TEXT NOT NULL UNIQUE" },
@@ -551,6 +582,30 @@ export interface AdminUserSummary {
   updatedAt: string | null;
 }
 
+export type TrashCategory = "spots" | "schools" | "stays";
+export interface TrashItem {
+  category: TrashCategory;
+  id: number;
+  name: string;
+  deletedAt: string;
+  daysRemaining: number;
+  expiresAt: string;
+}
+export interface RestoreAssignmentItem {
+  id: number;
+  name: string;
+  recoverable: boolean;
+}
+export interface RestoreInfo {
+  category: TrashCategory;
+  id: number;
+  name: string;
+  totalAssignments: number;
+  recoverableAssignments: number;
+  unrecoverableAssignments: number;
+  affectedItems: RestoreAssignmentItem[];
+}
+
 export interface IStorage {
   // auth
   getUser(id: number): Promise<User | undefined>;
@@ -619,6 +674,11 @@ export interface IStorage {
   getSeoContent(): Promise<SeoContent>;
   saveSeoDraft(next: Pick<SeoContent, "homepageTitleDraft" | "homepageDescriptionDraft" | "exploreTitleDraft" | "exploreDescriptionDraft" | "methodologyTitleDraft" | "methodologyDescriptionDraft">): Promise<SeoContent>;
   publishSeoDraft(): Promise<SeoContent>;
+  // trash (soft delete)
+  listTrash(): Promise<TrashItem[]>;
+  getRestoreInfo(category: TrashCategory, id: number): Promise<RestoreInfo | undefined>;
+  restoreEntity(category: TrashCategory, id: number): Promise<void>;
+  permanentDeleteEntity(category: TrashCategory, id: number): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -681,11 +741,15 @@ export class DatabaseStorage implements IStorage {
   }
 
   async listSpots(publishedOnly: boolean) {
-    const all = db.select().from(spots).all();
+    const all = db.select().from(spots).where(isNull(spots.deletedAt)).all();
     return publishedOnly ? all.filter(s => s.published) : all;
   }
-  async getSpot(id: number) { return db.select().from(spots).where(eq(spots.id, id)).get(); }
-  async getSpotBySlug(slug: string) { return db.select().from(spots).where(eq(spots.slug, slug)).get(); }
+  async getSpot(id: number) {
+    return db.select().from(spots).where(and(eq(spots.id, id), isNull(spots.deletedAt))).get();
+  }
+  async getSpotBySlug(slug: string) {
+    return db.select().from(spots).where(and(eq(spots.slug, slug), isNull(spots.deletedAt))).get();
+  }
   async createSpot(s: InsertSpot) {
     return db.insert(spots).values({ ...s, publicId: (s as any).publicId || crypto.randomUUID(), published: false, hasDraft: true, createdAt: now(), updatedAt: now() } as any).returning().get();
   }
@@ -700,10 +764,11 @@ export class DatabaseStorage implements IStorage {
     } as any).where(eq(spots.id, id)).returning().get();
   }
   async deleteSpot(id: number) {
-    db.delete(monthlyRecords).where(eq(monthlyRecords.spotId, id)).run();
+    // Soft delete: immediately unpublish so public site hides it; set deleted_at for 30-day retention.
+    db.update(spots).set({ published: false, deletedAt: now(), updatedAt: now() } as any).where(eq(spots.id, id)).run();
+    // Remove spot-level assignments so the spot no longer appears in listings on other spot pages.
     db.delete(spotSchools).where(eq(spotSchools.spotId, id)).run();
     db.delete(spotStays).where(eq(spotStays.spotId, id)).run();
-    db.delete(spots).where(eq(spots.id, id)).run();
   }
 
   async listMonthly(spotId: number, publishedOnly: boolean) {
@@ -761,10 +826,12 @@ export class DatabaseStorage implements IStorage {
 
   // ── Schools: global entity CRUD ──
 
-  async getSchool(id: number) { return db.select().from(schools).where(eq(schools.id, id)).get(); }
+  async getSchool(id: number) {
+    return db.select().from(schools).where(and(eq(schools.id, id), isNull(schools.deletedAt))).get();
+  }
 
   async listAllSchools(filter: ListingsFilter): Promise<ListingsPage<School & { assignedSpotsCount: number }>> {
-    let all = db.select().from(schools).all();
+    let all = db.select().from(schools).where(isNull(schools.deletedAt)).all();
     const assignments = db.select().from(spotSchools).all();
     const assignCountById: Record<number, number> = {};
     for (const a of assignments) assignCountById[a.schoolId] = (assignCountById[a.schoolId] || 0) + 1;
@@ -817,8 +884,8 @@ export class DatabaseStorage implements IStorage {
     return db.update(schools).set({ published: true, hasDraft: false, publishedSnapshot: JSON.stringify(s), updatedAt: now() } as any).where(eq(schools.id, id)).returning().get();
   }
   async deleteSchool(id: number) {
+    db.update(schools).set({ published: false, deletedAt: now(), updatedAt: now() } as any).where(eq(schools.id, id)).run();
     db.delete(spotSchools).where(eq(spotSchools.schoolId, id)).run();
-    db.delete(schools).where(eq(schools.id, id)).run();
   }
 
   // ── Schools: spot assignments ──
@@ -828,7 +895,8 @@ export class DatabaseStorage implements IStorage {
       .all().sort((a, b) => a.sortOrder - b.sortOrder);
     if (!assignments.length) return [];
     const ids = assignments.map(a => a.schoolId);
-    const rows = db.select().from(schools).where(inArray(schools.id, ids)).all();
+    const rows = db.select().from(schools)
+      .where(and(inArray(schools.id, ids), isNull(schools.deletedAt))).all();
     const byId = new Map(rows.map(r => [r.id, r]));
     const ordered = assignments.map(a => byId.get(a.schoolId)).filter(Boolean) as School[];
     return publishedOnly ? ordered.filter(s => s.published) : ordered;
@@ -856,10 +924,12 @@ export class DatabaseStorage implements IStorage {
 
   // ── Stays: global entity CRUD ──
 
-  async getStay(id: number) { return db.select().from(stays).where(eq(stays.id, id)).get(); }
+  async getStay(id: number) {
+    return db.select().from(stays).where(and(eq(stays.id, id), isNull(stays.deletedAt))).get();
+  }
 
   async listAllStays(filter: ListingsFilter): Promise<ListingsPage<Stay & { assignedSpotsCount: number }>> {
-    let all = db.select().from(stays).all();
+    let all = db.select().from(stays).where(isNull(stays.deletedAt)).all();
     const assignments = db.select().from(spotStays).all();
     const assignCountById: Record<number, number> = {};
     for (const a of assignments) assignCountById[a.stayId] = (assignCountById[a.stayId] || 0) + 1;
@@ -905,8 +975,8 @@ export class DatabaseStorage implements IStorage {
     return db.update(stays).set({ published: true, hasDraft: false, publishedSnapshot: JSON.stringify(s), updatedAt: now() } as any).where(eq(stays.id, id)).returning().get();
   }
   async deleteStay(id: number) {
+    db.update(stays).set({ published: false, deletedAt: now(), updatedAt: now() } as any).where(eq(stays.id, id)).run();
     db.delete(spotStays).where(eq(spotStays.stayId, id)).run();
-    db.delete(stays).where(eq(stays.id, id)).run();
   }
 
   // ── Stays: spot assignments ──
@@ -916,7 +986,8 @@ export class DatabaseStorage implements IStorage {
       .all().sort((a, b) => a.sortOrder - b.sortOrder);
     if (!assignments.length) return [];
     const ids = assignments.map(a => a.stayId);
-    const rows = db.select().from(stays).where(inArray(stays.id, ids)).all();
+    const rows = db.select().from(stays)
+      .where(and(inArray(stays.id, ids), isNull(stays.deletedAt))).all();
     const byId = new Map(rows.map(r => [r.id, r]));
     const ordered = assignments.map(a => byId.get(a.stayId)).filter(Boolean) as Stay[];
     return publishedOnly ? ordered.filter(s => s.published) : ordered;
@@ -1034,6 +1105,71 @@ export class DatabaseStorage implements IStorage {
       } as any).where(eq(seoSettings.id, row.id)).returning().get();
     })();
     return toSeoContent(updated);
+  }
+
+  async listTrash(): Promise<TrashItem[]> {
+    const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+    const toItem = (category: TrashCategory, id: number, name: string, deletedAt: string): TrashItem => {
+      const deletedMs = new Date(deletedAt).getTime();
+      const expiresMs = deletedMs + RETENTION_MS;
+      const daysRemaining = Math.max(0, Math.ceil((expiresMs - Date.now()) / (24 * 60 * 60 * 1000)));
+      return { category, id, name, deletedAt, daysRemaining, expiresAt: new Date(expiresMs).toISOString() };
+    };
+    const deletedSpots = sqlite.prepare(`SELECT id, name, deleted_at FROM spots WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC`).all() as { id: number; name: string; deleted_at: string }[];
+    const deletedSchools = sqlite.prepare(`SELECT id, name, deleted_at FROM schools WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC`).all() as { id: number; name: string; deleted_at: string }[];
+    const deletedStays = sqlite.prepare(`SELECT id, name, deleted_at FROM stays WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC`).all() as { id: number; name: string; deleted_at: string }[];
+    return [
+      ...deletedSpots.map(s => toItem("spots", s.id, s.name, s.deleted_at)),
+      ...deletedSchools.map(s => toItem("schools", s.id, s.name, s.deleted_at)),
+      ...deletedStays.map(s => toItem("stays", s.id, s.name, s.deleted_at)),
+    ];
+  }
+
+  async getRestoreInfo(category: TrashCategory, id: number): Promise<RestoreInfo | undefined> {
+    if (category === "spots") {
+      const row = sqlite.prepare(`SELECT id, name FROM spots WHERE id = ? AND deleted_at IS NOT NULL`).get(id) as { id: number; name: string } | undefined;
+      if (!row) return undefined;
+      // Spots have no outgoing assignments to show (schools/stays are assigned TO spots)
+      return { category, id: row.id, name: row.name, totalAssignments: 0, recoverableAssignments: 0, unrecoverableAssignments: 0, affectedItems: [] };
+    }
+    if (category === "schools") {
+      const row = sqlite.prepare(`SELECT id, name FROM schools WHERE id = ? AND deleted_at IS NOT NULL`).get(id) as { id: number; name: string } | undefined;
+      if (!row) return undefined;
+      // Find previously stored assignments (in spot_schools, these were cleared on soft-delete; check history via direct query isn't possible, so return empty — restore appends to end per spec)
+      return { category, id: row.id, name: row.name, totalAssignments: 0, recoverableAssignments: 0, unrecoverableAssignments: 0, affectedItems: [] };
+    }
+    if (category === "stays") {
+      const row = sqlite.prepare(`SELECT id, name FROM stays WHERE id = ? AND deleted_at IS NOT NULL`).get(id) as { id: number; name: string } | undefined;
+      if (!row) return undefined;
+      return { category, id: row.id, name: row.name, totalAssignments: 0, recoverableAssignments: 0, unrecoverableAssignments: 0, affectedItems: [] };
+    }
+    return undefined;
+  }
+
+  async restoreEntity(category: TrashCategory, id: number): Promise<void> {
+    const timestamp = now();
+    if (category === "spots") {
+      db.update(spots).set({ published: false, hasDraft: true, deletedAt: null, updatedAt: timestamp } as any).where(eq(spots.id, id)).run();
+    } else if (category === "schools") {
+      db.update(schools).set({ published: false, hasDraft: true, deletedAt: null, updatedAt: timestamp } as any).where(eq(schools.id, id)).run();
+    } else if (category === "stays") {
+      db.update(stays).set({ published: false, hasDraft: true, deletedAt: null, updatedAt: timestamp } as any).where(eq(stays.id, id)).run();
+    }
+  }
+
+  async permanentDeleteEntity(category: TrashCategory, id: number): Promise<void> {
+    if (category === "spots") {
+      sqlite.prepare(`DELETE FROM monthly_records WHERE spot_id = ?`).run(id);
+      sqlite.prepare(`DELETE FROM spot_schools WHERE spot_id = ?`).run(id);
+      sqlite.prepare(`DELETE FROM spot_stays WHERE spot_id = ?`).run(id);
+      db.delete(spots).where(eq(spots.id, id)).run();
+    } else if (category === "schools") {
+      sqlite.prepare(`DELETE FROM spot_schools WHERE school_id = ?`).run(id);
+      db.delete(schools).where(eq(schools.id, id)).run();
+    } else if (category === "stays") {
+      sqlite.prepare(`DELETE FROM spot_stays WHERE stay_id = ?`).run(id);
+      db.delete(stays).where(eq(stays.id, id)).run();
+    }
   }
 }
 

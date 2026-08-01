@@ -15,7 +15,7 @@ import {
   ExcelImportHistoryItem,
   ExcelImportPreviewResponse,
 } from "@/lib/types";
-import { Plus, ChevronUp, ChevronDown, Check, X, Globe, Map } from "lucide-react";
+import { Plus, ChevronUp, ChevronDown, Check, X, Globe, Map, Trash2 } from "lucide-react";
 
 type SchoolRow = School & { assignedSpotsCount: number };
 const PER_PAGE_OPTIONS = [25, 50, 100];
@@ -209,6 +209,17 @@ export default function AdminListingsSchools() {
     await loadHistory();
   };
 
+  const deleteSchool = async (id: number, name: string) => {
+    if (!window.confirm(`Move "${name}" to Trash? It will be permanently deleted after 30 days.`)) return;
+    try {
+      await api("DELETE", `/api/admin/listings/schools/${id}`);
+      toast({ title: "School moved to Trash" });
+      pushState({ ...state });
+    } catch (e: any) {
+      toast({ title: "Delete failed", description: String(e.message || e), variant: "destructive" });
+    }
+  };
+
   const SortHeader = ({ col, label }: { col: string; label: string }) => (
     <button
       onClick={() =>
@@ -380,7 +391,12 @@ export default function AdminListingsSchools() {
                 </td>
                 <td className="px-4 py-3 text-muted-foreground text-xs">{school.updatedAt ? new Date(school.updatedAt).toLocaleDateString() : "—"}</td>
                 <td className="px-4 py-3">
-                  {!school.published && <Button size="sm" variant="outline" onClick={() => void publishSchool(school.id)}>Publish</Button>}
+                  <div className="flex items-center gap-1">
+                    {!school.published && <Button size="sm" variant="outline" onClick={() => void publishSchool(school.id)}>Publish</Button>}
+                    <Button size="sm" variant="ghost" onClick={() => void deleteSchool(school.id, school.name)} title="Move to Trash" className="text-muted-foreground hover:text-destructive">
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </td>
               </tr>
             ))}

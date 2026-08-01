@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import { and, eq } from "drizzle-orm";
 import * as XLSX from "xlsx";
 import { db, storage, sqlite } from "./storage";
-import type { ListingsFilter, SeoContent } from "./storage";
+import type { ListingsFilter, SeoContent, TrashCategory } from "./storage";
 import { enrichSpotById, MissingCoordinatesError } from "./services/enrichment";
 import { calculateAutoMonthlyScore, deriveSeasonLabelFromScore, resolveMonthlyScore } from "@shared/scoring";
 import { insertSpotSchema, insertMonthlySchema, monthlyRecords, schools, spots, stays, spotSchools, spotStays } from "@shared/schema";
@@ -187,7 +187,8 @@ function shouldBlockForExcel(req: Request): boolean {
   if (!isExcelImportActive()) return false;
   const allowed = req.path.startsWith("/api/admin/excel/status")
     || req.path.startsWith("/api/admin/excel/import/")
-    || req.path.startsWith("/api/admin/excel/dismiss");
+    || req.path.startsWith("/api/admin/excel/dismiss")
+    || req.path.startsWith("/api/admin/trash");
   if (allowed) return false;
   return req.method !== "GET";
 }
@@ -1943,6 +1944,46 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!body) return res.status(400).json({ error: "body required" });
     const page = await storage.upsertSitePage({ slug, title, body } as any);
     res.json(page);
+  });
+
+  // ── Trash: soft-delete lifecycle (spec §28) ──
+  const TRASH_CATEGORIES = new Set<TrashCategory>(["spots", "schools", "stays"]);
+  function isTrashCategory(v: string): v is TrashCategory { return TRASH_CATEGORIES.has(v as TrashCategory); }
+
+  app.get("/api/admin/trash", requireAuth, async (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const items = await storage.listTrash();
+    res.json(items);
+  });
+
+  app.get("/api/admin/trash/:category/:id/restore-info", requireAuth, async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const category = req.params.category as string;
+    if (!isTrashCategory(category)) return res.status(400).json({ error: "invalid category" });
+    const id = Number(req.params.id);
+    const info = await storage.getRestoreInfo(category, id);
+    if (!info) return res.status(404).json({ error: "not found in trash" });
+    res.json(info);
+  });
+
+  app.post("/api/admin/trash/:category/:id/restore", requireAuth, async (req, res) => {
+    const category = req.params.category as string;
+    if (!isTrashCategory(category)) return res.status(400).json({ error: "invalid category" });
+    const id = Number(req.params.id);
+    const info = await storage.getRestoreInfo(category, id);
+    if (!info) return res.status(404).json({ error: "not found in trash" });
+    await storage.restoreEntity(category, id);
+    res.json({ ok: true, category, id });
+  });
+
+  app.delete("/api/admin/trash/:category/:id", requireAuth, async (req, res) => {
+    const category = req.params.category as string;
+    if (!isTrashCategory(category)) return res.status(400).json({ error: "invalid category" });
+    const id = Number(req.params.id);
+    const info = await storage.getRestoreInfo(category, id);
+    if (!info) return res.status(404).json({ error: "not found in trash" });
+    await storage.permanentDeleteEntity(category, id);
+    res.json({ ok: true });
   });
 
   return httpServer;
