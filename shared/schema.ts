@@ -53,6 +53,10 @@ export const spots = sqliteTable("spots", {
   sourceNotes: text("source_notes").default(""),
   // ranking mode: 'manual' | 'auto' (admin-only control)
   rankingMode: text("ranking_mode").default("auto"),
+  // Weather status tracking (separate publish dimension from content)
+  weatherLastError: text("weather_last_error"),             // last enrichment error message
+  weatherCoordUpdatedAt: text("weather_coord_updated_at"),  // set when lat/lng/onshore change
+  weatherHasManualChanges: integer("weather_has_manual_changes", { mode: "boolean" }).default(false),
   // draft/publish
   published: integer("published", { mode: "boolean" }).default(false),
   hasDraft: integer("has_draft", { mode: "boolean" }).default(true),

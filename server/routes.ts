@@ -17,7 +17,15 @@ const MONTH_ORDER = [
 
 type DataStatus = "fresh" | "dirty" | "missing";
 
+// Spec §20.1 content status
+type ContentStatus = "unpublished" | "published" | "published-draft";
+// Spec §20.2 weather status
+type WeatherStatus = "Missing" | "Up to date" | "Up to date · Manual changes" | "Outdated" | "Update failed";
+
 const REFRESH_SPOT_DELAY_MS = 900;
+
+// Fields whose change makes weather data outdated (spec §20.2).
+const WEATHER_COORD_FIELDS = new Set(["latitude", "longitude"]);
 
 function parseIsoMs(value: string | null | undefined): number | null {
   if (!value) return null;
@@ -32,6 +40,27 @@ function spotDataStatus(spot: { dataLastRefreshedAt?: string | null; updatedAt?:
   if (refreshedAt == null) return "missing";
   if (updatedAt != null && updatedAt > refreshedAt) return "dirty";
   return "fresh";
+}
+
+function computeContentStatus(spot: { published?: boolean | null; hasDraft?: boolean | null }): ContentStatus {
+  if (!spot.published) return "unpublished";
+  if (spot.hasDraft) return "published-draft";
+  return "published";
+}
+
+function computeWeatherStatus(spot: {
+  dataLastRefreshedAt?: string | null;
+  weatherLastError?: string | null;
+  weatherCoordUpdatedAt?: string | null;
+  weatherHasManualChanges?: boolean | null;
+}): WeatherStatus {
+  if (!spot.dataLastRefreshedAt) return "Missing";
+  if (spot.weatherLastError) return "Update failed";
+  const refreshedAt = parseIsoMs(spot.dataLastRefreshedAt);
+  const coordUpdatedAt = parseIsoMs((spot as any).weatherCoordUpdatedAt);
+  if (refreshedAt != null && coordUpdatedAt != null && coordUpdatedAt > refreshedAt) return "Outdated";
+  if (spot.weatherHasManualChanges) return "Up to date · Manual changes";
+  return "Up to date";
 }
 
 function monthlyScoreForSpot(row: any, rankingMode?: string | null): number | null {
@@ -130,6 +159,8 @@ function serializeSpot(s: Spot, preview = true) {
     publicId: v.publicId || "",
     dataStatus,
     dataNeedsRefresh: dataStatus !== "fresh",
+    contentStatus: computeContentStatus(s),
+    weatherStatus: computeWeatherStatus(s as any),
     published: !!s.published,
     hasDraft: !!s.hasDraft,
     // never expose the raw snapshot blob to clients
@@ -344,7 +375,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.patch("/api/admin/spots/:id", requireAuth, async (req, res) => {
-    const updated = await storage.updateSpot(Number(req.params.id), normalizeSpotInput(req.body));
+    const id = Number(req.params.id);
+    const body = normalizeSpotInput(req.body);
+    // If any weather-coord-relevant fields are changing, record that timestamp
+    // so weatherStatus can show "Outdated" until data is refreshed.
+    const touchesWeatherCoords = WEATHER_COORD_FIELDS.size > 0 &&
+      Object.keys(req.body || {}).some(k => WEATHER_COORD_FIELDS.has(k));
+    if (touchesWeatherCoords) {
+      (body as any).weatherCoordUpdatedAt = new Date().toISOString();
+    }
+    const updated = await storage.updateSpot(id, body);
     if (!updated) return res.status(404).json({ error: "not found" });
     res.json(serializeSpot(updated));
   });
@@ -434,6 +474,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.patch("/api/admin/monthly/:id", requireAuth, async (req, res) => {
     const updated = await storage.updateMonthly(Number(req.params.id), req.body);
     if (!updated) return res.status(404).json({ error: "not found" });
+    // Mark the parent spot as having manual weather changes (spec §20.2 "Up to date · Manual changes").
+    await storage.updateSpot(updated.spotId, { weatherHasManualChanges: true } as any);
+    // For already-published spots, manual weather edits go live immediately (spec §19.3).
+    const spot = await storage.getSpot(updated.spotId);
+    if (spot?.published) {
+      await storage.publishMonthly(updated.id);
+    }
     res.json(serializeMonthly(updated));
   });
   app.post("/api/admin/monthly/:id/publish", requireAuth, async (req, res) => {
@@ -443,13 +490,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
   app.post("/api/admin/spots/:id/monthly/publish", requireAuth, async (req, res) => {
     const spotId = Number(req.params.id);
-    const rows = await storage.listMonthly(spotId, false);
-    const published: MonthlyRecord[] = [];
-    for (const row of rows) {
-      const next = await storage.publishMonthly(row.id);
-      if (next) published.push(next);
-    }
-    res.json({ publishedCount: published.length, monthly: published.map(m => serializeMonthly(m)) });
+    const count = await storage.publishAllMonthlyForSpot(spotId);
+    res.json({ publishedCount: count });
+  });
+  // Reset all manual weather changes for a spot (spec §19.4).
+  app.post("/api/admin/spots/:id/weather/reset", requireAuth, async (req, res) => {
+    const spotId = Number(req.params.id);
+    const spot = await storage.getSpot(spotId);
+    if (!spot) return res.status(404).json({ error: "not found" });
+    await storage.resetWeatherManualChanges(spotId);
+    const updated = await storage.getSpot(spotId);
+    res.json(serializeSpot(updated!, true));
   });
   app.post("/api/admin/scores/recalculate", requireAuth, async (_req, res) => {
     const rows = await storage.listAllMonthly(false);
