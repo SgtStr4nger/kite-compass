@@ -3,7 +3,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Slider } from "@/components/ui/slider";
 import { Search } from "lucide-react";
+
+const WIND_SLIDER_MIN = 15;
+const WIND_SLIDER_MAX = 40;
 
 export interface FilterState {
   query: string;
@@ -11,12 +15,19 @@ export interface FilterState {
   spotType: string[];
   riderLevel: string[];
   vibe: string[];
+  windType: string[];
+  waterState: string[];
+  windMin: number | null;
+  windMax: number | null;
   country: string | null;
 }
 
 export const emptyFilters: FilterState = {
   query: "",
-  months: [], spotType: [], riderLevel: [], vibe: [], country: null,
+  months: [], spotType: [], riderLevel: [], vibe: [],
+  windType: [], waterState: [],
+  windMin: null, windMax: null,
+  country: null,
 };
 
 // maps filterDef.key -> FilterState key
@@ -24,6 +35,8 @@ const KEY_MAP: Record<string, keyof FilterState> = {
   spotTypes: "spotType",
   riderLevels: "riderLevel",
   vibeTags: "vibe",
+  windTypes: "windType",
+  waterStates: "waterState",
 };
 
 export function MonthPicker({
@@ -117,6 +130,12 @@ export function FilterPanel({
     onChange({ ...state, [key]: arr.includes(v) ? arr.filter(x => x !== v) : [...arr, v] });
   };
 
+  const sliderValue = [
+    state.windMin ?? WIND_SLIDER_MIN,
+    state.windMax ?? WIND_SLIDER_MAX,
+  ];
+  const windRangeActive = state.windMin != null || state.windMax != null;
+
   return (
     <div className="space-y-6">
       <div>
@@ -134,6 +153,40 @@ export function FilterPanel({
       </div>
 
       <MonthPicker value={state.months} onChange={(months) => onChange({ ...state, months })} />
+
+      {/* Wind range slider */}
+      <div>
+        <div className="mb-2 flex items-center justify-between text-sm font-medium text-foreground">
+          <span>Average wind</span>
+          {windRangeActive && (
+            <button
+              type="button"
+              className="text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => onChange({ ...state, windMin: null, windMax: null })}
+            >
+              Clear
+            </button>
+          )}
+        </div>
+        <Slider
+          min={WIND_SLIDER_MIN}
+          max={WIND_SLIDER_MAX}
+          step={1}
+          value={sliderValue}
+          onValueChange={([lo, hi]) => {
+            onChange({
+              ...state,
+              windMin: lo === WIND_SLIDER_MIN ? null : lo,
+              windMax: hi === WIND_SLIDER_MAX ? null : hi,
+            });
+          }}
+          data-testid="slider-wind-range"
+        />
+        <div className="mt-1 flex justify-between text-xs text-muted-foreground">
+          <span>{windRangeActive ? `${sliderValue[0]} kn` : `${WIND_SLIDER_MIN} kn`}</span>
+          <span>{windRangeActive ? `${sliderValue[1]} kn` : `${WIND_SLIDER_MAX} kn`}</span>
+        </div>
+      </div>
 
       {defs.map(def => {
         const sk = KEY_MAP[def.key];

@@ -16,6 +16,8 @@ export interface MonthlyRecord {
   maxWaveHeightM: number | null;
   avgWavePeriodS: number | null;
   dominantWaveDirectionDeg: number | null;
+  primaryWindType: string | null;
+  secondaryWindType: string | null;
   windSourceName: string;
   windSourceUrl: string;
   internalNotes: string;
@@ -87,6 +89,7 @@ export interface Spot {
   spotTypes: string[];
   riderLevels: string[];
   vibeTags: string[];
+  waterStates: string[];
   internalNotes: string;
   sourceNotes: string;
   rankingMode: string; // manual|auto

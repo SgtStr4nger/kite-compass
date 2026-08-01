@@ -31,6 +31,7 @@ ensureColumns("spots", [
   { name: "data_source", ddl: "data_source TEXT DEFAULT ''" },
   { name: "data_last_refreshed_at", ddl: "data_last_refreshed_at TEXT" },
   { name: "data_quality_note", ddl: "data_quality_note TEXT DEFAULT ''" },
+  { name: "water_states", ddl: "water_states TEXT DEFAULT '[]'" },
 ]);
 ensureColumns("monthly_records", [
   { name: "avg_kiteable_wind_10m_knots", ddl: "avg_kiteable_wind_10m_knots REAL" },
@@ -40,6 +41,8 @@ ensureColumns("monthly_records", [
   { name: "max_wave_height_m", ddl: "max_wave_height_m REAL" },
   { name: "avg_wave_period_s", ddl: "avg_wave_period_s REAL" },
   { name: "dominant_wave_direction_deg", ddl: "dominant_wave_direction_deg REAL" },
+  { name: "primary_wind_type", ddl: "primary_wind_type TEXT" },
+  { name: "secondary_wind_type", ddl: "secondary_wind_type TEXT" },
 ]);
 
 const now = () => new Date().toISOString();

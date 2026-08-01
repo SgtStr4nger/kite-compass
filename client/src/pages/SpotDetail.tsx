@@ -10,31 +10,9 @@ import { SpotDetail as SpotDetailT, MonthlyRecord, MONTHS, SEASON_META, tagLabel
 import { getHashSearch } from "@/lib/filterParams";
 import { Wind, Gauge, CalendarDays, MapPin, Plane, ExternalLink, ArrowLeft, Navigation, Waves } from "lucide-react";
 import placeholderSpot from "@/assets/placeholder-spot.jpg";
+import { resolveMonthlyScore } from "@shared/scoring";
 
 const PLACEHOLDER = placeholderSpot;
-
-function clamp01(value: number) {
-  return Math.max(0, Math.min(1, value));
-}
-
-function normalize(value: number, min: number, max: number) {
-  if (max <= min) return 0;
-  return clamp01((value - min) / (max - min));
-}
-
-function weatherScore(rec: MonthlyRecord) {
-  const wind = rec.avgKiteableWind10mKnots ?? rec.averageBaseWind;
-  const days = rec.kiteableDaysCount ?? rec.windDays;
-  const hours = rec.avgKiteableHoursPerDay;
-  const parts: { value: number; weight: number }[] = [];
-  if (wind != null && Number.isFinite(wind)) parts.push({ value: normalize(wind, 12, 25), weight: 0.5 });
-  if (days != null && Number.isFinite(days)) parts.push({ value: normalize(days, 3, 20), weight: 0.3 });
-  if (hours != null && Number.isFinite(hours)) parts.push({ value: normalize(hours, 1, 6), weight: 0.2 });
-  if (parts.length === 0) return null;
-  const totalWeight = parts.reduce((sum, part) => sum + part.weight, 0);
-  const weighted = parts.reduce((sum, part) => sum + part.value * part.weight, 0) / totalWeight;
-  return Math.round(weighted * 100) / 10;
-}
 
 export default function SpotDetail() {
   const [, params] = useRoute("/spots/:slug");
@@ -52,7 +30,7 @@ export default function SpotDetail() {
     if (selectedMonth) return spot.monthly.find(m => m.month === selectedMonth) ?? null;
     // otherwise the best weather-scoring month
     const scored = [...spot.monthly].sort((a, b) => {
-      return ((b.automaticWindScore ?? weatherScore(b)) ?? -1) - ((a.automaticWindScore ?? weatherScore(a)) ?? -1);
+      return (resolveMonthlyScore(b, spot.rankingMode) ?? -1) - (resolveMonthlyScore(a, spot.rankingMode) ?? -1);
     });
     return scored[0] ?? null;
   }, [spot, selectedMonth]);
@@ -75,7 +53,7 @@ export default function SpotDetail() {
   const monthlySorted = MONTHS
     .map(m => spot.monthly.find(r => r.month === m))
     .filter(Boolean) as SpotDetailT["monthly"];
-  const activeScore = activeRec ? (activeRec.automaticWindScore ?? weatherScore(activeRec)) : null;
+  const activeScore = activeRec ? resolveMonthlyScore(activeRec, spot.rankingMode) : null;
 
   return (
     <SiteLayout>

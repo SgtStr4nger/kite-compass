@@ -23,6 +23,7 @@
 
 import { storage } from "../storage";
 import { enrichCoordinate, type EnrichmentResult } from "./openMeteo";
+import { calculateAutoMonthlyScore, deriveSeasonLabelFromScore } from "@shared/scoring";
 
 export interface EnrichSpotOutcome {
   ok: boolean;
@@ -50,42 +51,6 @@ function hasCoords(lat: number | null, lng: number | null): boolean {
          typeof lng === "number" && Number.isFinite(lng);
 }
 
-function clamp01(value: number): number {
-  return Math.max(0, Math.min(1, value));
-}
-
-function normalize(value: number, min: number, max: number): number {
-  if (max <= min) return 0;
-  return clamp01((value - min) / (max - min));
-}
-
-export function calculateWeatherScore(row: {
-  avgKiteableWind10mKnots?: number | null;
-  averageBaseWind?: number | null;
-  kiteableDaysCount?: number | null;
-  windDays?: number | null;
-  avgKiteableHoursPerDay?: number | null;
-}): number | null {
-  const wind = row.avgKiteableWind10mKnots ?? row.averageBaseWind;
-  const days = row.kiteableDaysCount ?? row.windDays;
-  const hours = row.avgKiteableHoursPerDay;
-  const parts: { value: number; weight: number }[] = [];
-  if (wind != null && Number.isFinite(wind)) parts.push({ value: normalize(wind, 12, 25), weight: 0.5 });
-  if (days != null && Number.isFinite(days)) parts.push({ value: normalize(days, 3, 20), weight: 0.3 });
-  if (hours != null && Number.isFinite(hours)) parts.push({ value: normalize(hours, 1, 6), weight: 0.2 });
-  if (parts.length === 0) return null;
-  const totalWeight = parts.reduce((sum, part) => sum + part.weight, 0);
-  const weighted = parts.reduce((sum, part) => sum + part.value * part.weight, 0) / totalWeight;
-  return Math.round(weighted * 100) / 10;
-}
-
-export function seasonLabelFromScore(score: number | null): "peak" | "side" | "off" {
-  if (score == null) return "side";
-  if (score >= 7.5) return "peak";
-  if (score >= 5) return "side";
-  return "off";
-}
-
 /**
  * Apply an EnrichmentResult to a spot's monthly rows, preserving manual fields.
  * Creates missing month rows, updates existing ones. Returns count written.
@@ -96,8 +61,8 @@ async function applyResult(spotId: number, result: EnrichmentResult): Promise<nu
   let written = 0;
 
   for (const em of result.months) {
-    const automaticWindScore = calculateWeatherScore(em);
-    const seasonLabel = seasonLabelFromScore(automaticWindScore);
+    const automaticWindScore = calculateAutoMonthlyScore(em);
+    const seasonLabel = deriveSeasonLabelFromScore(automaticWindScore);
     // The canonical enriched metrics (overwrite).
     const metrics = {
       avgKiteableWind10mKnots: em.avgKiteableWind10mKnots,
