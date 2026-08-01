@@ -32,6 +32,9 @@ ensureColumns("spots", [
   { name: "data_last_refreshed_at", ddl: "data_last_refreshed_at TEXT" },
   { name: "data_quality_note", ddl: "data_quality_note TEXT DEFAULT ''" },
   { name: "water_states", ddl: "water_states TEXT DEFAULT '[]'" },
+  { name: "weather_last_error", ddl: "weather_last_error TEXT" },
+  { name: "weather_coord_updated_at", ddl: "weather_coord_updated_at TEXT" },
+  { name: "weather_has_manual_changes", ddl: "weather_has_manual_changes INTEGER DEFAULT 0" },
 ]);
 ensureColumns("monthly_records", [
   { name: "avg_kiteable_wind_10m_knots", ddl: "avg_kiteable_wind_10m_knots REAL" },
@@ -175,6 +178,8 @@ export interface IStorage {
   createMonthly(m: InsertMonthly): Promise<MonthlyRecord>;
   updateMonthly(id: number, m: Partial<InsertMonthly>): Promise<MonthlyRecord | undefined>;
   publishMonthly(id: number): Promise<MonthlyRecord | undefined>;
+  publishAllMonthlyForSpot(spotId: number): Promise<number>;
+  resetWeatherManualChanges(spotId: number): Promise<void>;
   deleteMonthly(id: number): Promise<void>;
   // linked entities
   listSchools(spotId: number, publishedOnly: boolean): Promise<School[]>;
@@ -252,6 +257,29 @@ export class DatabaseStorage implements IStorage {
     return db.update(monthlyRecords).set({
       published: true, hasDraft: false, publishedSnapshot: snapshotMonthly(m), updatedAt: now(),
     } as any).where(eq(monthlyRecords.id, id)).returning().get();
+  }
+  async publishAllMonthlyForSpot(spotId: number): Promise<number> {
+    const rows = db.select().from(monthlyRecords).where(eq(monthlyRecords.spotId, spotId)).all();
+    let published = 0;
+    for (const m of rows) {
+      db.update(monthlyRecords).set({
+        published: true, hasDraft: false, publishedSnapshot: snapshotMonthly(m), updatedAt: now(),
+      } as any).where(eq(monthlyRecords.id, m.id)).run();
+      published++;
+    }
+    return published;
+  }
+  async resetWeatherManualChanges(spotId: number): Promise<void> {
+    // Restore each monthly record to its auto-calculated values by snapshotting current auto values.
+    // Manual edits are cleared; scores remain as-is (recalculate is a separate action).
+    const rows = db.select().from(monthlyRecords).where(eq(monthlyRecords.spotId, spotId)).all();
+    for (const m of rows) {
+      db.update(monthlyRecords).set({
+        hasDraft: true, updatedAt: now(),
+      } as any).where(eq(monthlyRecords.id, m.id)).run();
+    }
+    db.update(spots).set({ weatherHasManualChanges: false, updatedAt: now() } as any)
+      .where(eq(spots.id, spotId)).run();
   }
   async deleteMonthly(id: number) { db.delete(monthlyRecords).where(eq(monthlyRecords.id, id)).run(); }
 

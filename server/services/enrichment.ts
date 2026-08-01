@@ -54,8 +54,9 @@ function hasCoords(lat: number | null, lng: number | null): boolean {
 /**
  * Apply an EnrichmentResult to a spot's monthly rows, preserving manual fields.
  * Creates missing month rows, updates existing ones. Returns count written.
+ * If `spotPublished` is true, each record is immediately published (weather bypass).
  */
-async function applyResult(spotId: number, result: EnrichmentResult): Promise<number> {
+async function applyResult(spotId: number, result: EnrichmentResult, spotPublished: boolean): Promise<number> {
   const existing = await storage.listMonthly(spotId, false); // include drafts
   const byMonth = new Map(existing.map(m => [m.month, m]));
   let written = 0;
@@ -63,7 +64,6 @@ async function applyResult(spotId: number, result: EnrichmentResult): Promise<nu
   for (const em of result.months) {
     const automaticWindScore = calculateAutoMonthlyScore(em);
     const seasonLabel = deriveSeasonLabelFromScore(automaticWindScore);
-    // The canonical enriched metrics (overwrite).
     const metrics = {
       avgKiteableWind10mKnots: em.avgKiteableWind10mKnots,
       kiteableDaysCount: em.kiteableDaysCount,
@@ -74,27 +74,26 @@ async function applyResult(spotId: number, result: EnrichmentResult): Promise<nu
       dominantWaveDirectionDeg: em.dominantWaveDirectionDeg,
       automaticWindScore,
       seasonLabel,
-      // Mirror onto legacy display columns so existing UI keeps showing values.
       averageBaseWind: em.avgKiteableWind10mKnots,
       windDays: em.kiteableDaysCount,
-      // Attribution for the public "source" line.
       windSourceName: "Open-Meteo",
       windSourceUrl: "https://open-meteo.com",
     };
 
     const current = byMonth.get(em.month);
     if (current) {
-      // Update in place. seasonLabel, manualScore, automaticWindScore,
-      // internalNotes are intentionally NOT included → preserved.
       await storage.updateMonthly(current.id, metrics as any);
     } else {
-      // New month row: seed the computed score + season for the admin to review.
-      await storage.createMonthly({
-        spotId, month: em.month, ...metrics,
-      } as any);
+      await storage.createMonthly({ spotId, month: em.month, ...metrics } as any);
     }
     written++;
   }
+
+  // For already-published spots, weather changes bypass the draft queue and go live immediately.
+  if (spotPublished) {
+    await storage.publishAllMonthlyForSpot(spotId);
+  }
+
   return written;
 }
 
@@ -102,19 +101,30 @@ async function applyResult(spotId: number, result: EnrichmentResult): Promise<nu
 export async function enrichSpot(spot: {
   id: number; slug: string; name: string;
   latitude: number | null; longitude: number | null;
+  published?: boolean | null;
 }): Promise<EnrichSpotOutcome> {
   if (!hasCoords(spot.latitude, spot.longitude)) throw new MissingCoordinatesError();
 
-  // Fetch + aggregate. If wind fails this throws → nothing is written below.
-  const result = await enrichCoordinate(spot.latitude as number, spot.longitude as number);
+  let result: EnrichmentResult;
+  try {
+    result = await enrichCoordinate(spot.latitude as number, spot.longitude as number);
+  } catch (e: any) {
+    // Record failure on the spot so weatherStatus can surface "Update failed".
+    await storage.updateSpot(spot.id, {
+      weatherLastError: String(e?.message ?? e),
+    } as any);
+    throw e;
+  }
 
-  const monthsWritten = await applyResult(spot.id, result);
+  const monthsWritten = await applyResult(spot.id, result, !!spot.published);
 
-  // Stamp spot-level metadata (as a draft edit).
+  // Stamp spot-level metadata; clear any previous error and manual-change flag.
   await storage.updateSpot(spot.id, {
     dataSource: result.dataSource,
     dataLastRefreshedAt: result.refreshedAt,
     dataQualityNote: result.qualityNote,
+    weatherLastError: null,
+    weatherHasManualChanges: false,
   } as any);
 
   return {
