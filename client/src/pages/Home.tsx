@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { SiteLayout } from "@/components/SiteChrome";
@@ -9,13 +9,25 @@ import { SpotMap, MapPoint } from "@/components/SpotMap";
 import { Button } from "@/components/ui/button";
 import { Search, Wind, Compass, Waves, SlidersHorizontal } from "lucide-react";
 import heroImg from "@/assets/hero.jpg";
-import { SpotListItem, MONTHS } from "@/lib/types";
+import { SpotListItem, PublicSeoState } from "@/lib/types";
+import { applyPageMetadata } from "@/lib/metadata";
 
 export default function Home() {
   const [, navigate] = useLocation();
   const [months, setMonths] = useState<string[]>([]);
 
   const { data: allSpots } = useQuery<SpotListItem[]>({ queryKey: ["/api/spots"] });
+  const { data: seo } = useQuery<PublicSeoState>({ queryKey: ["/api/seo"] });
+
+  useEffect(() => {
+    applyPageMetadata({
+      title: seo?.homepageTitle ?? "Kite Compass | Find your perfect kitesurf month",
+      description: seo?.homepageDescription ?? "Discover the best kitesurfing destinations month by month with Kite Compass rankings, wind insights and travel context.",
+      robots: "index,follow",
+      canonicalPath: "/",
+      ogImage: heroImg,
+    });
+  }, [seo]);
 
   const mapPoints: MapPoint[] = useMemo(() =>
     (allSpots ?? [])

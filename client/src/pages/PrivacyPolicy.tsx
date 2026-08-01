@@ -4,6 +4,7 @@ import { SiteLayout } from "@/components/SiteChrome";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SitePage } from "@/lib/types";
 import { applyPageMetadata } from "@/lib/metadata";
+import { getHashSearch } from "@/lib/filterParams";
 
 function Paragraphs({ body }: { body: string }) {
   return (
@@ -22,15 +23,18 @@ function Paragraphs({ body }: { body: string }) {
 }
 
 export default function PrivacyPolicy() {
-  useEffect(() => {
-    applyPageMetadata(
-      "Privacy Policy | Kite Compass",
-      "Learn how Kite Compass handles data and protects your privacy.",
-      "index,follow",
-    );
-  }, []);
+  const preview = new URLSearchParams(getHashSearch()).get("preview") === "1";
 
-  const previewQuery = typeof window !== "undefined" && window.location.search.includes("preview=1") ? "?preview=1" : "";
+  useEffect(() => {
+    applyPageMetadata({
+      title: "Privacy Policy | Kite Compass",
+      description: "Learn how Kite Compass handles data and protects your privacy.",
+      robots: preview ? "noindex,nofollow" : "index,follow",
+      canonicalPath: "/privacy-policy",
+    });
+  }, [preview]);
+
+  const previewQuery = preview ? "?preview=1" : "";
   const { data: page, isLoading } = useQuery<SitePage>({ queryKey: [`/api/pages/privacy-policy${previewQuery}`] });
 
   return (

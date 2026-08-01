@@ -4,7 +4,7 @@ import type { Server } from 'node:http';
 import crypto from 'node:crypto';
 import { and, eq } from "drizzle-orm";
 import { db, storage } from "./storage";
-import type { ListingsFilter } from "./storage";
+import type { ListingsFilter, SeoContent } from "./storage";
 import { enrichSpotById, MissingCoordinatesError } from "./services/enrichment";
 import { calculateAutoMonthlyScore, deriveSeasonLabelFromScore, resolveMonthlyScore } from "@shared/scoring";
 import { insertSpotSchema, insertMonthlySchema, monthlyRecords, schools, spots, stays } from "@shared/schema";
@@ -191,6 +191,7 @@ function publishedView<T extends { publishedSnapshot?: any; published?: any }>(r
 }
 function serializeSpot(s: Spot, preview = true) {
   const v = publishedView(s, preview) as Spot;
+  const publishedSlug = publishedSnapshotSlug(s) ?? s.slug;
   const dataStatus = spotDataStatus(v);
   return {
     ...v,
@@ -202,6 +203,7 @@ function serializeSpot(s: Spot, preview = true) {
     publicId: v.publicId || "",
     dataStatus,
     dataNeedsRefresh: dataStatus !== "fresh",
+    publishedSlug,
     contentStatus: computeContentStatus(s),
     weatherStatus: computeWeatherStatus(s as any),
     published: !!s.published,
@@ -209,6 +211,32 @@ function serializeSpot(s: Spot, preview = true) {
     // never expose the raw snapshot blob to clients
     publishedSnapshot: undefined,
   };
+}
+
+function publishedSnapshotSlug(spot: { slug?: string | null; publishedSnapshot?: unknown }): string | null {
+  const snapshot = spot.publishedSnapshot;
+  if (!snapshot) return null;
+  try {
+    const parsed = typeof snapshot === "string" ? JSON.parse(snapshot) : snapshot;
+    return parsed?.slug && typeof parsed.slug === "string" ? parsed.slug : null;
+  } catch {
+    return null;
+  }
+}
+
+function seoDraftPayload(body: any): Pick<SeoContent, "homepageTitleDraft" | "homepageDescriptionDraft" | "exploreTitleDraft" | "exploreDescriptionDraft" | "methodologyTitleDraft" | "methodologyDescriptionDraft"> {
+  return {
+    homepageTitleDraft: String(body?.homepageTitleDraft ?? ""),
+    homepageDescriptionDraft: String(body?.homepageDescriptionDraft ?? ""),
+    exploreTitleDraft: String(body?.exploreTitleDraft ?? ""),
+    exploreDescriptionDraft: String(body?.exploreDescriptionDraft ?? ""),
+    methodologyTitleDraft: String(body?.methodologyTitleDraft ?? ""),
+    methodologyDescriptionDraft: String(body?.methodologyDescriptionDraft ?? ""),
+  };
+}
+
+function allSeoDraftFieldsFilled(next: Pick<SeoContent, "homepageTitleDraft" | "homepageDescriptionDraft" | "exploreTitleDraft" | "exploreDescriptionDraft" | "methodologyTitleDraft" | "methodologyDescriptionDraft">): boolean {
+  return Object.values(next).every(value => value.trim().length > 0);
 }
 function serializeMonthly(m: MonthlyRecord, preview = true) {
   const v = publishedView(m, preview) as MonthlyRecord;
@@ -248,6 +276,17 @@ function serializeAdminUser(u: any) {
 }
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
+  app.get("/robots.txt", (_req, res) => {
+    res.type("text/plain").send([
+      "User-agent: *",
+      "Allow: /",
+      "Disallow: /admin",
+      "Disallow: /admin/",
+      "Disallow: /*preview=1",
+      "Disallow: /api/",
+    ].join("\n"));
+  });
+
   /* ══════════════ AUTH ══════════════ */
   // Setup: create the first admin (only allowed when no users exist).
   app.post("/api/auth/setup", async (req, res) => {
@@ -544,7 +583,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // Public single spot by slug with its monthly records.
   app.get("/api/spots/slug/:slug", async (req, res) => {
     const admin = isAuthed(req) && req.query.preview === "1";
-    const spot = await storage.getSpotBySlug(req.params.slug);
+    const requestedSlug = String(req.params.slug);
+    let spot = await storage.getSpotBySlug(requestedSlug);
+    if (!admin) {
+      if (!spot || !spot.published) {
+        const publishedSpots = await storage.listSpots(true);
+        spot = publishedSpots.find(s => {
+          if (s.slug === requestedSlug) return true;
+          return publishedSnapshotSlug(s) === requestedSlug;
+        });
+      }
+    }
     if (!spot || (!spot.published && !admin)) return res.status(404).json({ error: "not found" });
     const serializedSpot = serializeSpot(spot, admin);
     const monthly = (await storage.listMonthly(spot.id, !admin)).map(m => serializeMonthly(m, admin));
@@ -576,6 +625,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const page = await storage.getSitePageBySlug(slug);
     if (!page) return res.status(404).json({ error: "not found" });
     res.json(page);
+  });
+
+  app.get("/api/seo", async (_req, res) => {
+    const seo = await storage.getSeoContent();
+    res.json({
+      homepageTitle: seo.homepageTitlePublished,
+      homepageDescription: seo.homepageDescriptionPublished,
+      exploreTitle: seo.exploreTitlePublished,
+      exploreDescription: seo.exploreDescriptionPublished,
+      methodologyTitle: seo.methodologyTitlePublished,
+      methodologyDescription: seo.methodologyDescriptionPublished,
+      updatedAt: seo.updatedAt,
+    });
   });
 
   /* ══════════════ ADMIN (auth required) ══════════════ */
@@ -1075,6 +1137,60 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       privacyPolicy: LEGAL_PAGE_META["privacy-policy"],
       legalNotice: LEGAL_PAGE_META["legal-notice"],
       canPublish: legal.privacyPolicyDraft.trim().length > 0 && legal.legalNoticeDraft.trim().length > 0,
+    });
+  });
+
+  app.get("/api/admin/seo", requireAuth, async (_req, res) => {
+    const seo = await storage.getSeoContent();
+    res.json({
+      ...seo,
+      canPublish: allSeoDraftFieldsFilled({
+        homepageTitleDraft: seo.homepageTitleDraft,
+        homepageDescriptionDraft: seo.homepageDescriptionDraft,
+        exploreTitleDraft: seo.exploreTitleDraft,
+        exploreDescriptionDraft: seo.exploreDescriptionDraft,
+        methodologyTitleDraft: seo.methodologyTitleDraft,
+        methodologyDescriptionDraft: seo.methodologyDescriptionDraft,
+      }),
+    });
+  });
+
+  app.patch("/api/admin/seo", requireAuth, async (req, res) => {
+    const next = seoDraftPayload(req.body);
+    if (!allSeoDraftFieldsFilled(next)) {
+      return res.status(400).json({ error: "All six SEO fields are required." });
+    }
+    const seo = await storage.saveSeoDraft(next);
+    res.json({
+      ...seo,
+      canPublish: allSeoDraftFieldsFilled(next),
+    });
+  });
+
+  app.post("/api/admin/seo/publish", requireAuth, async (_req, res) => {
+    const current = await storage.getSeoContent();
+    const draft = {
+      homepageTitleDraft: current.homepageTitleDraft,
+      homepageDescriptionDraft: current.homepageDescriptionDraft,
+      exploreTitleDraft: current.exploreTitleDraft,
+      exploreDescriptionDraft: current.exploreDescriptionDraft,
+      methodologyTitleDraft: current.methodologyTitleDraft,
+      methodologyDescriptionDraft: current.methodologyDescriptionDraft,
+    };
+    if (!allSeoDraftFieldsFilled(draft)) {
+      return res.status(400).json({ error: "All six SEO fields are required before publish." });
+    }
+    const seo = await storage.publishSeoDraft();
+    res.json({
+      ...seo,
+      canPublish: allSeoDraftFieldsFilled({
+        homepageTitleDraft: seo.homepageTitleDraft,
+        homepageDescriptionDraft: seo.homepageDescriptionDraft,
+        exploreTitleDraft: seo.exploreTitleDraft,
+        exploreDescriptionDraft: seo.exploreDescriptionDraft,
+        methodologyTitleDraft: seo.methodologyTitleDraft,
+        methodologyDescriptionDraft: seo.methodologyDescriptionDraft,
+      }),
     });
   });
 

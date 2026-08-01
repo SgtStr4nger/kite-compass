@@ -1,8 +1,25 @@
+import { useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { SiteLayout } from "@/components/SiteChrome";
 import { SeasonBadge } from "@/components/Badges";
 import { Wind, Gauge, CalendarDays, Compass, Info } from "lucide-react";
+import { PublicSeoState } from "@/lib/types";
+import { applyPageMetadata } from "@/lib/metadata";
+import heroImg from "@/assets/hero.jpg";
 
 export default function Methodology() {
+  const { data: seo } = useQuery<PublicSeoState>({ queryKey: ["/api/seo"] });
+
+  useEffect(() => {
+    applyPageMetadata({
+      title: seo?.methodologyTitle ?? "Methodology | How Kite Compass Ranks Spots",
+      description: seo?.methodologyDescription ?? "Learn how Kite Compass evaluates monthly kitesurf conditions, seasonality and destination fit across global spots.",
+      robots: "index,follow",
+      canonicalPath: "/methodology",
+      ogImage: heroImg,
+    });
+  }, [seo]);
+
   return (
     <SiteLayout>
       <div className="mx-auto max-w-3xl px-5 py-12 md:px-8">

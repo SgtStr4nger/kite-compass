@@ -1,15 +1,71 @@
-function upsertMeta(name: string, content: string) {
-  let node = document.querySelector(`meta[name="${name}"]`);
+type MetadataInput = {
+  title: string;
+  description: string;
+  robots?: string;
+  canonicalPath?: string;
+  canonicalUrl?: string;
+  ogTitle?: string;
+  ogDescription?: string;
+  ogImage?: string;
+  ogUrl?: string;
+};
+
+function upsertMetaBy(selector: string, attr: "name" | "property", value: string) {
+  let node = document.querySelector(`meta[${attr}="${selector}"]`);
   if (!node) {
     node = document.createElement("meta");
-    node.setAttribute("name", name);
+    node.setAttribute(attr, selector);
     document.head.appendChild(node);
   }
-  node.setAttribute("content", content);
+  node.setAttribute("content", value);
 }
 
-export function applyPageMetadata(title: string, description: string, robots: string = "index,follow") {
-  document.title = title;
-  upsertMeta("description", description);
-  upsertMeta("robots", robots);
+function upsertCanonical(url: string) {
+  let node = document.querySelector('link[rel="canonical"]');
+  if (!node) {
+    node = document.createElement("link");
+    node.setAttribute("rel", "canonical");
+    document.head.appendChild(node);
+  }
+  node.setAttribute("href", url);
+}
+
+function toAbsoluteUrl(pathOrUrl: string): string {
+  if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
+  const normalized = pathOrUrl.startsWith("/") ? pathOrUrl : `/${pathOrUrl}`;
+  return `${window.location.origin}${normalized}`;
+}
+
+export function applyRobotsMetadata(robots: string) {
+  upsertMetaBy("robots", "name", robots);
+}
+
+export function applyPageMetadata(
+  titleOrInput: string | MetadataInput,
+  description?: string,
+  robots: string = "index,follow",
+) {
+  const input: MetadataInput = typeof titleOrInput === "string"
+    ? {
+      title: titleOrInput,
+      description: description ?? "",
+      robots,
+    }
+    : titleOrInput;
+
+  document.title = input.title;
+  upsertMetaBy("description", "name", input.description);
+  upsertMetaBy("robots", "name", input.robots ?? "index,follow");
+
+  const canonical = input.canonicalUrl
+    ? toAbsoluteUrl(input.canonicalUrl)
+    : input.canonicalPath
+      ? toAbsoluteUrl(input.canonicalPath)
+      : toAbsoluteUrl(window.location.pathname);
+  upsertCanonical(canonical);
+
+  upsertMetaBy("og:title", "property", input.ogTitle ?? input.title);
+  upsertMetaBy("og:description", "property", input.ogDescription ?? input.description);
+  upsertMetaBy("og:url", "property", input.ogUrl ? toAbsoluteUrl(input.ogUrl) : canonical);
+  if (input.ogImage) upsertMetaBy("og:image", "property", toAbsoluteUrl(input.ogImage));
 }

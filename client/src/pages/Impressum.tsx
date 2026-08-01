@@ -4,6 +4,7 @@ import { SiteLayout } from "@/components/SiteChrome";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SitePage } from "@/lib/types";
 import { applyPageMetadata } from "@/lib/metadata";
+import { getHashSearch } from "@/lib/filterParams";
 
 function Paragraphs({ body }: { body: string }) {
   return (
@@ -22,15 +23,18 @@ function Paragraphs({ body }: { body: string }) {
 }
 
 export default function Impressum() {
-  useEffect(() => {
-    applyPageMetadata(
-      "Legal Notice | Kite Compass",
-      "Legal information and contact details for Kite Compass.",
-      "index,follow",
-    );
-  }, []);
+  const preview = new URLSearchParams(getHashSearch()).get("preview") === "1";
 
-  const previewQuery = typeof window !== "undefined" && window.location.search.includes("preview=1") ? "?preview=1" : "";
+  useEffect(() => {
+    applyPageMetadata({
+      title: "Legal Notice | Kite Compass",
+      description: "Legal information and contact details for Kite Compass.",
+      robots: preview ? "noindex,nofollow" : "index,follow",
+      canonicalPath: "/legal-notice",
+    });
+  }, [preview]);
+
+  const previewQuery = preview ? "?preview=1" : "";
   const { data: page, isLoading } = useQuery<SitePage>({ queryKey: [`/api/pages/legal-notice${previewQuery}`] });
 
   return (

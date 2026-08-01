@@ -1,8 +1,8 @@
-import { users, spots, monthlyRecords, filterDefs, schools, stays, sitePages, legalPages, spotSchools, spotStays } from '@shared/schema';
+import { users, spots, monthlyRecords, filterDefs, schools, stays, sitePages, legalPages, seoSettings, spotSchools, spotStays } from '@shared/schema';
 import type {
   User, InsertUser, Spot, InsertSpot, MonthlyRecord, InsertMonthly,
   School, InsertSchool, Stay, InsertStay,
-  SitePage, InsertSitePage, LegalPage,
+  SitePage, InsertSitePage, LegalPage, SeoSettings,
   FilterDef, InsertFilterDef,
   SpotSchool, SpotStay,
 } from '@shared/schema';
@@ -36,6 +36,8 @@ ensureColumns("spots", [
   { name: "weather_last_error", ddl: "weather_last_error TEXT" },
   { name: "weather_coord_updated_at", ddl: "weather_coord_updated_at TEXT" },
   { name: "weather_has_manual_changes", ddl: "weather_has_manual_changes INTEGER DEFAULT 0" },
+  { name: "seo_title_override", ddl: "seo_title_override TEXT DEFAULT ''" },
+  { name: "seo_description_override", ddl: "seo_description_override TEXT DEFAULT ''" },
 ]);
 ensureColumns("monthly_records", [
   { name: "avg_kiteable_wind_10m_knots", ddl: "avg_kiteable_wind_10m_knots REAL" },
@@ -227,6 +229,25 @@ sqlite.exec(`
     created_at TEXT,
     updated_at TEXT
   );
+  CREATE TABLE IF NOT EXISTS seo_settings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    homepage_title_draft TEXT NOT NULL DEFAULT '',
+    homepage_description_draft TEXT NOT NULL DEFAULT '',
+    explore_title_draft TEXT NOT NULL DEFAULT '',
+    explore_description_draft TEXT NOT NULL DEFAULT '',
+    methodology_title_draft TEXT NOT NULL DEFAULT '',
+    methodology_description_draft TEXT NOT NULL DEFAULT '',
+    homepage_title_published TEXT NOT NULL DEFAULT '',
+    homepage_description_published TEXT NOT NULL DEFAULT '',
+    explore_title_published TEXT NOT NULL DEFAULT '',
+    explore_description_published TEXT NOT NULL DEFAULT '',
+    methodology_title_published TEXT NOT NULL DEFAULT '',
+    methodology_description_published TEXT NOT NULL DEFAULT '',
+    has_draft INTEGER DEFAULT 1,
+    published_at TEXT,
+    created_at TEXT,
+    updated_at TEXT
+  );
 `);
 
 // Migrate existing schools/stays with spot_id into the assignment tables
@@ -256,6 +277,22 @@ ensureColumns("legal_pages", [
   { name: "legal_notice_draft", ddl: "legal_notice_draft TEXT NOT NULL DEFAULT ''" },
   { name: "privacy_policy_published", ddl: "privacy_policy_published TEXT NOT NULL DEFAULT ''" },
   { name: "legal_notice_published", ddl: "legal_notice_published TEXT NOT NULL DEFAULT ''" },
+  { name: "has_draft", ddl: "has_draft INTEGER DEFAULT 1" },
+  { name: "published_at", ddl: "published_at TEXT" },
+]);
+ensureColumns("seo_settings", [
+  { name: "homepage_title_draft", ddl: "homepage_title_draft TEXT NOT NULL DEFAULT ''" },
+  { name: "homepage_description_draft", ddl: "homepage_description_draft TEXT NOT NULL DEFAULT ''" },
+  { name: "explore_title_draft", ddl: "explore_title_draft TEXT NOT NULL DEFAULT ''" },
+  { name: "explore_description_draft", ddl: "explore_description_draft TEXT NOT NULL DEFAULT ''" },
+  { name: "methodology_title_draft", ddl: "methodology_title_draft TEXT NOT NULL DEFAULT ''" },
+  { name: "methodology_description_draft", ddl: "methodology_description_draft TEXT NOT NULL DEFAULT ''" },
+  { name: "homepage_title_published", ddl: "homepage_title_published TEXT NOT NULL DEFAULT ''" },
+  { name: "homepage_description_published", ddl: "homepage_description_published TEXT NOT NULL DEFAULT ''" },
+  { name: "explore_title_published", ddl: "explore_title_published TEXT NOT NULL DEFAULT ''" },
+  { name: "explore_description_published", ddl: "explore_description_published TEXT NOT NULL DEFAULT ''" },
+  { name: "methodology_title_published", ddl: "methodology_title_published TEXT NOT NULL DEFAULT ''" },
+  { name: "methodology_description_published", ddl: "methodology_description_published TEXT NOT NULL DEFAULT ''" },
   { name: "has_draft", ddl: "has_draft INTEGER DEFAULT 1" },
   { name: "published_at", ddl: "published_at TEXT" },
 ]);
@@ -292,6 +329,14 @@ const defaultPrivacyPolicyBody = [
 ].join("\n");
 
 const defaultLegalNoticeBody = defaultImpressumBody;
+const DEFAULT_SEO_VALUES = {
+  homepageTitle: "Kite Compass | Find your perfect kitesurf month",
+  homepageDescription: "Discover the best kitesurfing destinations month by month with Kite Compass rankings, wind insights and travel context.",
+  exploreTitle: "Explore Kitesurf Spots by Month | Kite Compass",
+  exploreDescription: "Browse and compare kitesurf spots worldwide. Filter by season, conditions and travel vibe to find your next trip.",
+  methodologyTitle: "Methodology | How Kite Compass Ranks Spots",
+  methodologyDescription: "Learn how Kite Compass evaluates monthly kitesurf conditions, seasonality and destination fit across global spots.",
+} as const;
 
 function ensureDefaultSitePages() {
   const row = db.select().from(sitePages).where(eq(sitePages.slug, "impressum")).get();
@@ -324,6 +369,31 @@ function ensureDefaultLegalPages() {
   } as any).run();
 }
 ensureDefaultLegalPages();
+
+function ensureDefaultSeoSettings() {
+  const row = db.select().from(seoSettings).get();
+  if (row) return;
+  const timestamp = now();
+  db.insert(seoSettings).values({
+    homepageTitleDraft: DEFAULT_SEO_VALUES.homepageTitle,
+    homepageDescriptionDraft: DEFAULT_SEO_VALUES.homepageDescription,
+    exploreTitleDraft: DEFAULT_SEO_VALUES.exploreTitle,
+    exploreDescriptionDraft: DEFAULT_SEO_VALUES.exploreDescription,
+    methodologyTitleDraft: DEFAULT_SEO_VALUES.methodologyTitle,
+    methodologyDescriptionDraft: DEFAULT_SEO_VALUES.methodologyDescription,
+    homepageTitlePublished: DEFAULT_SEO_VALUES.homepageTitle,
+    homepageDescriptionPublished: DEFAULT_SEO_VALUES.homepageDescription,
+    exploreTitlePublished: DEFAULT_SEO_VALUES.exploreTitle,
+    exploreDescriptionPublished: DEFAULT_SEO_VALUES.exploreDescription,
+    methodologyTitlePublished: DEFAULT_SEO_VALUES.methodologyTitle,
+    methodologyDescriptionPublished: DEFAULT_SEO_VALUES.methodologyDescription,
+    hasDraft: false,
+    publishedAt: timestamp,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  } as any).run();
+}
+ensureDefaultSeoSettings();
 
 function ensureSpotPublicIds() {
   const rows = db.select({ id: spots.id, publicId: spots.publicId }).from(spots).all();
@@ -387,6 +457,26 @@ function toLegalContent(row: LegalPage): LegalContent {
   };
 }
 
+function toSeoContent(row: SeoSettings): SeoContent {
+  return {
+    homepageTitleDraft: row.homepageTitleDraft,
+    homepageDescriptionDraft: row.homepageDescriptionDraft,
+    exploreTitleDraft: row.exploreTitleDraft,
+    exploreDescriptionDraft: row.exploreDescriptionDraft,
+    methodologyTitleDraft: row.methodologyTitleDraft,
+    methodologyDescriptionDraft: row.methodologyDescriptionDraft,
+    homepageTitlePublished: row.homepageTitlePublished,
+    homepageDescriptionPublished: row.homepageDescriptionPublished,
+    exploreTitlePublished: row.exploreTitlePublished,
+    exploreDescriptionPublished: row.exploreDescriptionPublished,
+    methodologyTitlePublished: row.methodologyTitlePublished,
+    methodologyDescriptionPublished: row.methodologyDescriptionPublished,
+    hasDraft: !!row.hasDraft,
+    publishedAt: row.publishedAt ?? null,
+    updatedAt: row.updatedAt ?? null,
+  };
+}
+
 export interface ListingsFilter {
   search?: string;
   published?: boolean;
@@ -418,6 +508,24 @@ export interface LegalContent {
   legalNoticeDraft: string;
   privacyPolicyPublished: string;
   legalNoticePublished: string;
+  hasDraft: boolean;
+  publishedAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface SeoContent {
+  homepageTitleDraft: string;
+  homepageDescriptionDraft: string;
+  exploreTitleDraft: string;
+  exploreDescriptionDraft: string;
+  methodologyTitleDraft: string;
+  methodologyDescriptionDraft: string;
+  homepageTitlePublished: string;
+  homepageDescriptionPublished: string;
+  exploreTitlePublished: string;
+  exploreDescriptionPublished: string;
+  methodologyTitlePublished: string;
+  methodologyDescriptionPublished: string;
   hasDraft: boolean;
   publishedAt: string | null;
   updatedAt: string | null;
@@ -507,6 +615,10 @@ export interface IStorage {
   getLegalContent(): Promise<LegalContent>;
   saveLegalDraft(privacyPolicyDraft: string, legalNoticeDraft: string): Promise<LegalContent>;
   publishLegalDraft(): Promise<LegalContent>;
+  // SEO settings (shared draft/publish)
+  getSeoContent(): Promise<SeoContent>;
+  saveSeoDraft(next: Pick<SeoContent, "homepageTitleDraft" | "homepageDescriptionDraft" | "exploreTitleDraft" | "exploreDescriptionDraft" | "methodologyTitleDraft" | "methodologyDescriptionDraft">): Promise<SeoContent>;
+  publishSeoDraft(): Promise<SeoContent>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -885,6 +997,43 @@ export class DatabaseStorage implements IStorage {
       return out;
     })();
     return toLegalContent(updated);
+  }
+
+  async getSeoContent() {
+    const row = db.select().from(seoSettings).get();
+    if (!row) throw new Error("seo settings not initialized");
+    return toSeoContent(row);
+  }
+
+  async saveSeoDraft(next: Pick<SeoContent, "homepageTitleDraft" | "homepageDescriptionDraft" | "exploreTitleDraft" | "exploreDescriptionDraft" | "methodologyTitleDraft" | "methodologyDescriptionDraft">) {
+    const row = db.select().from(seoSettings).get();
+    if (!row) throw new Error("seo settings not initialized");
+    const updated = db.update(seoSettings).set({
+      ...next,
+      hasDraft: true,
+      updatedAt: now(),
+    } as any).where(eq(seoSettings.id, row.id)).returning().get();
+    return toSeoContent(updated);
+  }
+
+  async publishSeoDraft() {
+    const row = db.select().from(seoSettings).get();
+    if (!row) throw new Error("seo settings not initialized");
+    const nextPublishedAt = now();
+    const updated = sqlite.transaction(() => {
+      return db.update(seoSettings).set({
+        homepageTitlePublished: row.homepageTitleDraft,
+        homepageDescriptionPublished: row.homepageDescriptionDraft,
+        exploreTitlePublished: row.exploreTitleDraft,
+        exploreDescriptionPublished: row.exploreDescriptionDraft,
+        methodologyTitlePublished: row.methodologyTitleDraft,
+        methodologyDescriptionPublished: row.methodologyDescriptionDraft,
+        hasDraft: false,
+        publishedAt: nextPublishedAt,
+        updatedAt: nextPublishedAt,
+      } as any).where(eq(seoSettings.id, row.id)).returning().get();
+    })();
+    return toSeoContent(updated);
   }
 }
 

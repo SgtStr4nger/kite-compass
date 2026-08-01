@@ -70,6 +70,8 @@ export const spots = sqliteTable("spots", {
   waterStates: text("water_states").default("[]"),  // JSON array: Flat|Choppy|Wave|Mixed
   internalNotes: text("internal_notes").default(""),
   sourceNotes: text("source_notes").default(""),
+  seoTitleOverride: text("seo_title_override").default(""),
+  seoDescriptionOverride: text("seo_description_override").default(""),
   // ranking mode: 'manual' | 'auto' (admin-only control)
   rankingMode: text("ranking_mode").default("auto"),
   // Weather status tracking (separate publish dimension from content)
@@ -239,6 +241,30 @@ export const legalPages = sqliteTable("legal_pages", {
 export const insertLegalPageSchema = createInsertSchema(legalPages).omit({ id: true, createdAt: true, updatedAt: true }).partial();
 export type InsertLegalPage = z.infer<typeof insertLegalPageSchema>;
 export type LegalPage = typeof legalPages.$inferSelect;
+
+/* ─────────────── SEO settings (shared draft/publish) ─────────────── */
+export const seoSettings = sqliteTable("seo_settings", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  homepageTitleDraft: text("homepage_title_draft").notNull().default(""),
+  homepageDescriptionDraft: text("homepage_description_draft").notNull().default(""),
+  exploreTitleDraft: text("explore_title_draft").notNull().default(""),
+  exploreDescriptionDraft: text("explore_description_draft").notNull().default(""),
+  methodologyTitleDraft: text("methodology_title_draft").notNull().default(""),
+  methodologyDescriptionDraft: text("methodology_description_draft").notNull().default(""),
+  homepageTitlePublished: text("homepage_title_published").notNull().default(""),
+  homepageDescriptionPublished: text("homepage_description_published").notNull().default(""),
+  exploreTitlePublished: text("explore_title_published").notNull().default(""),
+  exploreDescriptionPublished: text("explore_description_published").notNull().default(""),
+  methodologyTitlePublished: text("methodology_title_published").notNull().default(""),
+  methodologyDescriptionPublished: text("methodology_description_published").notNull().default(""),
+  hasDraft: integer("has_draft", { mode: "boolean" }).default(true),
+  publishedAt: text("published_at"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+export const insertSeoSettingsSchema = createInsertSchema(seoSettings).omit({ id: true, createdAt: true, updatedAt: true }).partial();
+export type InsertSeoSettings = z.infer<typeof insertSeoSettingsSchema>;
+export type SeoSettings = typeof seoSettings.$inferSelect;
 
 /* ─────────────── Dynamic filter definitions ───────────────
  * Filterable fields are described in the DB so new filters can be added

@@ -3,7 +3,8 @@ import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { CompassMark } from "@/components/Logo";
 import { Button } from "@/components/ui/button";
-import { LogOut, LayoutGrid, Database, FileText, ExternalLink, School, Hotel, Users } from "lucide-react";
+import { LogOut, LayoutGrid, Database, FileText, ExternalLink, School, Hotel, Users, Search } from "lucide-react";
+import { applyRobotsMetadata } from "@/lib/metadata";
 
 export function AdminLayout({ children }: { children: ReactNode }) {
   const { email, logout, mustChangePassword } = useAuth();
@@ -13,6 +14,10 @@ export function AdminLayout({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (mustChangePassword && location !== "/admin/change-password") navigate("/admin/change-password");
   }, [mustChangePassword, location, navigate]);
+
+  useEffect(() => {
+    applyRobotsMetadata("noindex,nofollow");
+  }, []);
 
   const navLink = (href: string, icon: React.ReactNode, label: string, testId: string) => {
     const active = location === href || location.startsWith(href + "/");
@@ -45,6 +50,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
           <div className="pt-2">
             <div className="px-3 pb-1 text-xs font-medium uppercase tracking-wide text-sidebar-foreground/40">Settings</div>
             {navLink("/admin/data", <Database className="h-4 w-4" />, "Data", "link-admin-data")}
+            {navLink("/admin/seo", <Search className="h-4 w-4" />, "SEO", "link-admin-seo")}
             {navLink("/admin/legal", <FileText className="h-4 w-4" />, "Legal", "link-admin-legal")}
             {navLink("/admin/users", <Users className="h-4 w-4" />, "Users", "link-admin-users")}
           </div>
