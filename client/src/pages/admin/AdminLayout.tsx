@@ -44,6 +44,12 @@ export function AdminLayout({ children }: { children: ReactNode }) {
       setExcelStatus(prev => prev ? { ...prev, dismissed: true, visible: false } : prev);
     } catch {}
   };
+  const openImportCategory = () => {
+    if (!excelStatus?.category) return;
+    if (excelStatus.category === "spots") navigate("/admin/spots");
+    else if (excelStatus.category === "schools") navigate("/admin/listings/schools");
+    else if (excelStatus.category === "stays") navigate("/admin/listings/stays");
+  };
 
   const navLink = (href: string, icon: React.ReactNode, label: string, testId: string) => {
     const active = location === href || location.startsWith(href + "/");
@@ -99,14 +105,24 @@ export function AdminLayout({ children }: { children: ReactNode }) {
         {excelStatus?.visible && (
           <div className={`border-b px-5 py-3 text-sm md:px-8 ${excelStatus.active ? "border-amber-300 bg-amber-50 text-amber-900" : "border-emerald-300 bg-emerald-50 text-emerald-900"}`}>
             <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
-              <div>
+              <button
+                type="button"
+                onClick={openImportCategory}
+                disabled={!excelStatus.category}
+                className="text-left disabled:cursor-default"
+              >
                 <strong>Excel import: {excelStatus.status}</strong>
                 {excelStatus.category ? <span> · {excelStatus.category}</span> : null}
                 {excelStatus.message ? <span> · {excelStatus.message}</span> : null}
+              </button>
+              <div className="flex items-center gap-2">
+                {excelStatus.category && (
+                  <Button size="sm" variant="outline" onClick={openImportCategory}>Open</Button>
+                )}
+                {!excelStatus.active && excelStatus.dismissible && (
+                  <Button size="sm" variant="outline" onClick={dismissBanner}>Dismiss</Button>
+                )}
               </div>
-              {!excelStatus.active && excelStatus.dismissible && (
-                <Button size="sm" variant="outline" onClick={dismissBanner}>Dismiss</Button>
-              )}
             </div>
           </div>
         )}
