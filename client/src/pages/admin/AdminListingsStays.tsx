@@ -112,6 +112,12 @@ export default function AdminListingsStays() {
       .catch(() => toast({ title: "Failed to load spots", variant: "destructive" }));
     void loadHistory();
   }, [token, toast]);
+  useEffect(() => {
+    if (!token || preview) return;
+    api<ExcelImportPreviewResponse>("GET", "/api/admin/excel/import/stays/preview-current")
+      .then(setPreview)
+      .catch(() => {});
+  }, [token, preview]);
 
   const visibleIds = useMemo(() => data?.items.map((i) => i.id) ?? [], [data?.items]);
   const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.includes(id));

@@ -199,12 +199,69 @@ function pruneImportFileRetention() {
     WHERE created_at < ? AND (source_file_base64 IS NOT NULL OR updates_file_base64 IS NOT NULL OR errors_file_base64 IS NOT NULL)
   `).run(cutoff);
 }
+function setNoStore(res: Response) {
+  res.setHeader("Cache-Control", "no-store");
+}
 function writeWorkbookBase64(sheetName: string, headers: readonly string[], rows: Record<string, unknown>[]): string {
   const aoa: unknown[][] = [Array.from(headers), ...rows.map(row => headers.map(h => row[h] ?? ""))];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), sheetName);
   const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
   return buf.toString("base64");
+}
+async function parseImportRowsFromWorkbookBase64(category: ExcelCategory, fileBase64: string): Promise<ParsedImportRow[]> {
+  const workbook = XLSX.read(Buffer.from(fileBase64, "base64"), { type: "buffer" });
+  const sheetName = XLSX_SHEETS[category];
+  const sheet = workbook.Sheets[sheetName];
+  if (!sheet) throw new Error(`Sheet "${sheetName}" not found`);
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: "" });
+  const header = (rows[0] ?? []).map(toCellString);
+  const expected = XLSX_COLUMNS[category];
+  if (header.length !== expected.length || expected.some((col, i) => header[i] !== col)) {
+    throw new Error("Invalid column schema");
+  }
+  const dataRows = rows.slice(1);
+  if (dataRows.length > EXCEL_MAX_ROWS) throw new Error(`Maximum ${EXCEL_MAX_ROWS} data rows allowed`);
+
+  const knownSpotIds = new Set((await storage.listSpots(false)).map(s => s.id));
+  const knownSchoolIds = new Set((await storage.listAllSchools({ page: 1, perPage: EXCEL_MAX_ROWS })).items.map(s => s.id));
+  const knownStayIds = new Set((await storage.listAllStays({ page: 1, perPage: EXCEL_MAX_ROWS })).items.map(s => s.id));
+
+  return dataRows.map((raw, i) => {
+    const values = Object.fromEntries(expected.map((h, idx) => [h, toCellString((raw as unknown[])[idx])])) as Record<string, string>;
+    const parsed = category === "spots"
+      ? parseSpotsRow(values, knownSpotIds)
+      : category === "schools"
+        ? parseSchoolRow(values, knownSchoolIds, knownSpotIds)
+        : parseStayRow(values, knownStayIds, knownSpotIds);
+    return { ...parsed, rowNumber: i + 2 };
+  });
+}
+function buildPreviewResponse(session: ExcelPreviewSession) {
+  const category = session.category;
+  const expected = XLSX_COLUMNS[category];
+  const summary = {
+    newCount: session.rows.filter(r => r.kind === "new").length,
+    updateCount: session.rows.filter(r => r.kind === "update").length,
+    errorIdNotFoundCount: session.rows.filter(r => r.kind === "error_id_not_found").length,
+    errorInvalidDataCount: session.rows.filter(r => r.kind === "error_invalid_data").length,
+  };
+  const updatesXlsxBase64 = writeWorkbookBase64(
+    XLSX_SHEETS[category],
+    expected,
+    session.rows.filter(r => r.kind === "new" || r.kind === "update").map(r => r.values),
+  );
+  const errorsXlsxBase64 = writeWorkbookBase64(
+    XLSX_SHEETS[category],
+    [...expected, "error"],
+    session.rows.filter(r => r.kind.startsWith("error")).map(r => ({ ...r.values, error: r.error ?? "" })),
+  );
+  return {
+    previewId: session.id,
+    summary,
+    rows: session.rows.map(r => ({ rowNumber: r.rowNumber, kind: r.kind, internalId: r.internalId, error: r.error })),
+    files: { updatesFileName: "updates.xlsx", updatesFileBase64: updatesXlsxBase64, errorsFileName: "errors.xlsx", errorsFileBase64: errorsXlsxBase64 },
+  };
 }
 const LEGAL_PAGE_META = {
   "privacy-policy": {
@@ -686,6 +743,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.get("/api/admin/excel/status", requireAuth, async (_req, res) => {
+    setNoStore(res);
     pruneImportFileRetention();
     const row = getExcelState();
     res.json({
@@ -710,6 +768,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.get("/api/admin/excel/import/:category/history", requireAuth, async (req, res) => {
+    setNoStore(res);
     const category = String(req.params.category);
     if (!isExcelCategory(category)) return res.status(400).json({ error: "invalid category" });
     pruneImportFileRetention();
@@ -821,41 +880,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     setExcelState("Uploading", { category, message: `Uploading ${fileName}` });
     try {
       setExcelState("Validating", { category, message: `Validating ${fileName}` });
-      const workbook = XLSX.read(Buffer.from(fileBase64, "base64"), { type: "buffer" });
-      const sheetName = XLSX_SHEETS[category];
-      const sheet = workbook.Sheets[sheetName];
-      if (!sheet) throw new Error(`Sheet "${sheetName}" not found`);
-      const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: "" });
-      const header = (rows[0] ?? []).map(toCellString);
-      const expected = XLSX_COLUMNS[category];
-      if (header.length !== expected.length || expected.some((col, i) => header[i] !== col)) {
-        throw new Error("Invalid column schema");
-      }
-      const dataRows = rows.slice(1);
-      if (dataRows.length > EXCEL_MAX_ROWS) throw new Error(`Maximum ${EXCEL_MAX_ROWS} data rows allowed`);
-
-      const knownSpotIds = new Set((await storage.listSpots(false)).map(s => s.id));
-      const knownSchoolIds = new Set((await storage.listAllSchools({ page: 1, perPage: EXCEL_MAX_ROWS })).items.map(s => s.id));
-      const knownStayIds = new Set((await storage.listAllStays({ page: 1, perPage: EXCEL_MAX_ROWS })).items.map(s => s.id));
-      const parsedRows: ParsedImportRow[] = dataRows.map((raw, i) => {
-        const values = Object.fromEntries(expected.map((h, idx) => [h, toCellString((raw as unknown[])[idx])])) as Record<string, string>;
-        const parsed = category === "spots"
-          ? parseSpotsRow(values, knownSpotIds)
-          : category === "schools"
-            ? parseSchoolRow(values, knownSchoolIds, knownSpotIds)
-            : parseStayRow(values, knownStayIds, knownSpotIds);
-        return { ...parsed, rowNumber: i + 2 };
-      });
+      const parsedRows = await parseImportRowsFromWorkbookBase64(category, fileBase64);
+      const nowIso = new Date().toISOString();
       const summary = {
         newCount: parsedRows.filter(r => r.kind === "new").length,
         updateCount: parsedRows.filter(r => r.kind === "update").length,
         errorIdNotFoundCount: parsedRows.filter(r => r.kind === "error_id_not_found").length,
         errorInvalidDataCount: parsedRows.filter(r => r.kind === "error_invalid_data").length,
       };
-      const updatesXlsxBase64 = writeWorkbookBase64(XLSX_SHEETS[category], expected, parsedRows.filter(r => r.kind === "new" || r.kind === "update").map(r => r.values));
-      const errorsXlsxBase64 = writeWorkbookBase64(XLSX_SHEETS[category], [...expected, "error"], parsedRows.filter(r => r.kind.startsWith("error")).map(r => ({ ...r.values, error: r.error ?? "" })));
-
-      const nowIso = new Date().toISOString();
+      const previewId = crypto.randomUUID();
+      const session: ExcelPreviewSession = { id: previewId, category, fileName, rows: parsedRows, createdAtIso: nowIso, runId: -1 };
+      const previewPayload = buildPreviewResponse(session);
       const run = sqlite.prepare(`
         INSERT INTO excel_import_history
           (category, file_name, status, created_count, updated_count, skipped_count, error_count, new_count, update_count,
@@ -865,23 +900,62 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         category, fileName,
         summary.errorIdNotFoundCount + summary.errorInvalidDataCount,
         summary.newCount, summary.updateCount, summary.errorIdNotFoundCount, summary.errorInvalidDataCount,
-        nowIso, nowIso, nowIso, fileBase64, updatesXlsxBase64, errorsXlsxBase64,
+        nowIso, nowIso, nowIso, fileBase64, previewPayload.files.updatesFileBase64, previewPayload.files.errorsFileBase64,
       );
 
-      const previewId = crypto.randomUUID();
-      excelPreviewSessions.set(previewId, { id: previewId, category, fileName, rows: parsedRows, createdAtIso: nowIso, runId: Number(run.lastInsertRowid) });
+      session.runId = Number(run.lastInsertRowid);
+      excelPreviewSessions.set(previewId, session);
       setExcelState("Ready for confirmation", { category, run_id: Number(run.lastInsertRowid), message: fileName });
-      return res.json({
-        previewId,
-        summary,
-        rows: parsedRows.map(r => ({ rowNumber: r.rowNumber, kind: r.kind, internalId: r.internalId, error: r.error })),
-        files: { updatesFileName: "updates.xlsx", updatesFileBase64: updatesXlsxBase64, errorsFileName: "errors.xlsx", errorsFileBase64: errorsXlsxBase64 },
-      });
+      return res.json(previewPayload);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Excel import validation failed";
       setExcelState("Failed", { category, message, dismissible: true, dismissed: false });
       return res.status(400).json({ error: message });
     }
+  });
+
+  app.get("/api/admin/excel/import/:category/preview-current", requireAuth, async (req, res) => {
+    setNoStore(res);
+    const category = String(req.params.category);
+    if (!isExcelCategory(category)) return res.status(400).json({ error: "invalid category" });
+    const state = getExcelState();
+    if (state.status !== "Ready for confirmation" || state.category !== category || !state.run_id) {
+      return res.status(404).json({ error: "no preview ready for confirmation" });
+    }
+    const session = Array.from(excelPreviewSessions.values()).find(s => s.category === category && s.runId === state.run_id);
+    if (!session) {
+      const fallbackRow = sqlite.prepare(`
+        SELECT id, file_name, source_file_base64
+        FROM excel_import_history
+        WHERE id = ? AND category = ? AND status = 'Ready for confirmation'
+      `).get(state.run_id, category) as { id: number; file_name: string; source_file_base64: string | null } | undefined;
+      if (fallbackRow?.source_file_base64) {
+        try {
+          const parsedRows = await parseImportRowsFromWorkbookBase64(category, fallbackRow.source_file_base64);
+          const restoredSession: ExcelPreviewSession = {
+            id: crypto.randomUUID(),
+            category,
+            fileName: fallbackRow.file_name,
+            rows: parsedRows,
+            createdAtIso: new Date().toISOString(),
+            runId: fallbackRow.id,
+          };
+          excelPreviewSessions.set(restoredSession.id, restoredSession);
+          return res.json(buildPreviewResponse(restoredSession));
+        } catch {
+          // fall through to expiration handling below
+        }
+      }
+      const nowIso = new Date().toISOString();
+      sqlite.prepare(`
+        UPDATE excel_import_history
+        SET status = 'Failed', updated_at = ?, end_at = ?, technical_error = ?, rollback_notice = ?
+        WHERE id = ?
+      `).run(nowIso, nowIso, "Preview session expired before confirmation", "No changes were applied.", state.run_id);
+      setExcelState("Failed", { category, run_id: state.run_id, message: "Preview session expired. Please re-upload the file.", dismissible: true, dismissed: false });
+      return res.status(410).json({ error: "preview session expired. Please upload the file again." });
+    }
+    return res.json(buildPreviewResponse(session));
   });
 
   app.post("/api/admin/excel/import/:category/cancel", requireAuth, async (req, res) => {

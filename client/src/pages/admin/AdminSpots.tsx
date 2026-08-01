@@ -52,6 +52,12 @@ export default function AdminSpots() {
 
   const loadHistory = async () => setHistory(await api<ExcelImportHistoryItem[]>("GET", "/api/admin/excel/import/spots/history"));
   useEffect(() => { if (token) void loadHistory(); }, [token]);
+  useEffect(() => {
+    if (!token || preview) return;
+    api<ExcelImportPreviewResponse>("GET", "/api/admin/excel/import/spots/preview-current")
+      .then(setPreview)
+      .catch(() => {});
+  }, [token, preview]);
 
   const exportRows = async (scope: "selected" | "filtered" | "all" | "template") => {
     try {
