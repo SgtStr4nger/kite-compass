@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
-import { useLocation } from "wouter";
+import { useLocation, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { SiteLayout } from "@/components/SiteChrome";
 import { FilterPanel, FilterState } from "@/components/Filters";
@@ -8,9 +8,10 @@ import { SpotCard } from "@/components/SpotCard";
 import { SpotMap, MapPoint } from "@/components/SpotMap";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
-import { SpotListItem, FilterDef } from "@/lib/types";
-import { SlidersHorizontal, MapIcon, List, Compass } from "lucide-react";
+import { SpotListItem, FilterDef, SEASON_META } from "@/lib/types";
+import { SlidersHorizontal, MapIcon, List, Compass, Info } from "lucide-react";
 
 export default function Results() {
   const [, navigate] = useLocation();
@@ -117,7 +118,38 @@ export default function Results() {
 
             <div className="grid gap-6 xl:grid-cols-[1fr_1fr]">
               {/* list */}
-              <div className={`space-y-4 ${mobileView === "map" ? "hidden lg:block" : ""}`}>
+              <div className={`space-y-3 ${mobileView === "map" ? "hidden lg:block" : ""}`}>
+                {/* Season ⓘ popover — explains season colours (spec §7.5) */}
+                <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                  <span className="font-medium text-foreground">Season</span>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <button className="inline-flex items-center rounded-full p-0.5 hover:text-foreground focus:outline-none" aria-label="About season ratings">
+                        <Info className="h-3.5 w-3.5" />
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent align="start" className="w-64 text-sm">
+                      <p className="mb-3 font-medium text-foreground">Season ratings</p>
+                      <div className="space-y-2">
+                        {(["peak","side","off"] as const).map(k => (
+                          <div key={k} className="flex items-start gap-2">
+                            <span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-sm ${SEASON_META[k].dot}`} />
+                            <div>
+                              <span className="font-medium text-foreground">{SEASON_META[k].label}</span>
+                              <span className="text-muted-foreground">
+                                {k === "peak" ? " — at least 80 % of peak score" : k === "side" ? " — at least 50 %" : " — below 50 %"}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <Link href="/methodology" className="mt-3 block text-xs text-primary hover:underline">
+                        Learn about our methodology
+                      </Link>
+                    </PopoverContent>
+                  </Popover>
+                </div>
+
                 {isLoading ? (
                   Array.from({ length: 5 }).map((_, i) => (
                     <Skeleton key={i} className="h-36 w-full rounded-2xl" />
@@ -128,7 +160,6 @@ export default function Results() {
                       <SpotCard
                         spot={s}
                         months={filters.months}
-                        query={filters.query}
                         highlighted={selectedId === s.id}
                         onHover={() => setSelectedId(s.id)}
                         onLeave={() => setSelectedId(prev => (prev === s.id ? null : prev))}
