@@ -27,29 +27,38 @@ export interface MonthlyRecord {
 
 export interface School {
   id: number;
-  spotId: number;
   name: string;
+  sports: string[];
   websiteUrl: string;
   mapUrl: string;
   offersRental: boolean;
   offersLessons: boolean;
+  shortDescription: string;
   notes: string;
   favorite: boolean;
   published: boolean;
   hasDraft: boolean;
+  updatedAt?: string;
+  createdAt?: string;
+  // only present in global listing admin response
+  assignedSpotsCount?: number;
 }
 
 export interface Stay {
   id: number;
-  spotId: number;
   name: string;
   type: string;
   websiteUrl: string;
   mapUrl: string;
+  shortDescription: string;
   notes: string;
   favorite: boolean;
   published: boolean;
   hasDraft: boolean;
+  updatedAt?: string;
+  createdAt?: string;
+  // only present in global listing admin response
+  assignedSpotsCount?: number;
 }
 
 export interface SitePage {
@@ -59,6 +68,38 @@ export interface SitePage {
   body: string;
   createdAt?: string;
   updatedAt?: string;
+}
+
+export interface LegalPageConfig {
+  title: string;
+  seoTitle: string;
+  seoDescription: string;
+}
+
+export interface LegalAdminState {
+  privacyPolicyDraft: string;
+  legalNoticeDraft: string;
+  privacyPolicyPublished: string;
+  legalNoticePublished: string;
+  hasDraft: boolean;
+  publishedAt: string | null;
+  updatedAt: string | null;
+  canPublish: boolean;
+  privacyPolicy: LegalPageConfig;
+  legalNotice: LegalPageConfig;
+}
+
+export interface AdminUser {
+  id: number;
+  email: string;
+  role: "main" | "standard";
+  isActive: boolean;
+  mustChangePassword: boolean;
+  failedLoginAttempts: number;
+  temporaryLockUntil: string | null;
+  isFullyLocked: boolean;
+  createdAt: string | null;
+  updatedAt: string | null;
 }
 
 export interface Spot {
@@ -128,6 +169,16 @@ export interface FilterDef {
   options: string[];
   isPublic: boolean;
   sortOrder: number;
+}
+
+export const SCHOOL_SPORTS = ["Kitesurfing", "Wingfoiling", "Kitefoiling", "Surfing"] as const;
+export const STAY_TYPES = ["Hotel", "Hostel", "Apartment", "Guesthouse", "Resort"] as const;
+
+export interface ListingsPage<T> {
+  items: T[];
+  total: number;
+  page: number;
+  perPage: number;
 }
 
 export const MONTHS = [

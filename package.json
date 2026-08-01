@@ -10,7 +10,8 @@
     "check": "tsc",
     "db:push": "drizzle-kit push",
     "seed": "tsx server/seed.ts",
-    "enrich": "tsx server/enrich.ts"
+    "enrich": "tsx server/enrich.ts",
+    "recover-main-admin": "tsx server/recoverMainAdmin.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.4.0",

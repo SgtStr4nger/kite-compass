@@ -7,8 +7,27 @@ export const users = sqliteTable("users", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   email: text("email").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
+  role: text("role").notNull().default("standard"), // main|standard
+  isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
+  mustChangePassword: integer("must_change_password", { mode: "boolean" }).notNull().default(false),
+  failedLoginAttempts: integer("failed_login_attempts").notNull().default(0),
+  temporaryLockUntil: text("temporary_lock_until"),
+  isFullyLocked: integer("is_fully_locked", { mode: "boolean" }).notNull().default(false),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
 });
-export const insertUserSchema = createInsertSchema(users).pick({ email: true, passwordHash: true });
+export const insertUserSchema = createInsertSchema(users).pick({
+  email: true,
+  passwordHash: true,
+  role: true,
+  isActive: true,
+  mustChangePassword: true,
+  failedLoginAttempts: true,
+  temporaryLockUntil: true,
+  isFullyLocked: true,
+  createdAt: true,
+  updatedAt: true,
+});
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
 
@@ -115,14 +134,18 @@ export type InsertMonthly = z.infer<typeof insertMonthlySchema>;
 export type MonthlyRecord = typeof monthlyRecords.$inferSelect;
 
 /* ─────────────── Schools ─────────────── */
+// Global listing entities — assigned to spots via spot_schools.
 export const schools = sqliteTable("schools", {
   id: integer("id").primaryKey({ autoIncrement: true }),
-  spotId: integer("spot_id").notNull(),
+  // Legacy column retained for DB compat; use spot_schools for multi-spot assignment.
+  spotId: integer("spot_id"),
   name: text("name").notNull(),
+  sports: text("sports").default("[]"),             // JSON array: Kitesurfing, Wingfoiling, Kitefoiling, Surfing
   websiteUrl: text("website_url").default(""),
   mapUrl: text("map_url").default(""),
   offersRental: integer("offers_rental", { mode: "boolean" }).default(false),
   offersLessons: integer("offers_lessons", { mode: "boolean" }).default(false),
+  shortDescription: text("short_description").default(""), // max 300 chars
   notes: text("notes").default(""),
   favorite: integer("favorite", { mode: "boolean" }).default(false),
   published: integer("published", { mode: "boolean" }).default(false),
@@ -132,22 +155,24 @@ export const schools = sqliteTable("schools", {
   updatedAt: text("updated_at"),
 });
 export const insertSchoolSchema = createInsertSchema(schools).omit({
-  id: true, createdAt: true, updatedAt: true, publishedSnapshot: true,
+  id: true, createdAt: true, updatedAt: true, publishedSnapshot: true, spotId: true,
 }).partial().extend({
-  spotId: z.number(),
   name: z.string().min(1),
 });
 export type InsertSchool = z.infer<typeof insertSchoolSchema>;
 export type School = typeof schools.$inferSelect;
 
 /* ─────────────── Stays ─────────────── */
+// Global listing entities — assigned to spots via spot_stays.
 export const stays = sqliteTable("stays", {
   id: integer("id").primaryKey({ autoIncrement: true }),
-  spotId: integer("spot_id").notNull(),
+  // Legacy column retained for DB compat; use spot_stays for multi-spot assignment.
+  spotId: integer("spot_id"),
   name: text("name").notNull(),
-  type: text("type").default(""),
+  type: text("type").default(""),               // Hotel | Hostel | Apartment | Guesthouse | Resort
   websiteUrl: text("website_url").default(""),
   mapUrl: text("map_url").default(""),
+  shortDescription: text("short_description").default(""), // max 300 chars
   notes: text("notes").default(""),
   favorite: integer("favorite", { mode: "boolean" }).default(false),
   published: integer("published", { mode: "boolean" }).default(false),
@@ -157,13 +182,30 @@ export const stays = sqliteTable("stays", {
   updatedAt: text("updated_at"),
 });
 export const insertStaySchema = createInsertSchema(stays).omit({
-  id: true, createdAt: true, updatedAt: true, publishedSnapshot: true,
+  id: true, createdAt: true, updatedAt: true, publishedSnapshot: true, spotId: true,
 }).partial().extend({
-  spotId: z.number(),
   name: z.string().min(1),
 });
 export type InsertStay = z.infer<typeof insertStaySchema>;
 export type Stay = typeof stays.$inferSelect;
+
+/* ─────────────── Spot–listing assignment tables ─────────────── */
+// Assignments are ordered by sort_order; duplicate spot+listing pairs are not allowed.
+export const spotSchools = sqliteTable("spot_schools", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  spotId: integer("spot_id").notNull(),
+  schoolId: integer("school_id").notNull(),
+  sortOrder: integer("sort_order").notNull().default(0),
+});
+export type SpotSchool = typeof spotSchools.$inferSelect;
+
+export const spotStays = sqliteTable("spot_stays", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  spotId: integer("spot_id").notNull(),
+  stayId: integer("stay_id").notNull(),
+  sortOrder: integer("sort_order").notNull().default(0),
+});
+export type SpotStay = typeof spotStays.$inferSelect;
 
 /* ─────────────── Site pages ─────────────── */
 export const sitePages = sqliteTable("site_pages", {
@@ -181,6 +223,22 @@ export const insertSitePageSchema = createInsertSchema(sitePages).omit({ id: tru
 });
 export type InsertSitePage = z.infer<typeof insertSitePageSchema>;
 export type SitePage = typeof sitePages.$inferSelect;
+
+/* ─────────────── Legal pages (shared draft/publish) ─────────────── */
+export const legalPages = sqliteTable("legal_pages", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  privacyPolicyDraft: text("privacy_policy_draft").notNull().default(""),
+  legalNoticeDraft: text("legal_notice_draft").notNull().default(""),
+  privacyPolicyPublished: text("privacy_policy_published").notNull().default(""),
+  legalNoticePublished: text("legal_notice_published").notNull().default(""),
+  hasDraft: integer("has_draft", { mode: "boolean" }).default(true),
+  publishedAt: text("published_at"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+export const insertLegalPageSchema = createInsertSchema(legalPages).omit({ id: true, createdAt: true, updatedAt: true }).partial();
+export type InsertLegalPage = z.infer<typeof insertLegalPageSchema>;
+export type LegalPage = typeof legalPages.$inferSelect;
 
 /* ─────────────── Dynamic filter definitions ───────────────
  * Filterable fields are described in the DB so new filters can be added

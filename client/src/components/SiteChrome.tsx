@@ -14,8 +14,11 @@ export function SiteHeader() {
           <Link href="/methodology" className="rounded-md px-3 py-2 font-medium text-foreground/80 hover-elevate no-underline" data-testid="link-nav-methodology">
             Methodology
           </Link>
-          <Link href="/impressum" className="rounded-md px-3 py-2 font-medium text-foreground/80 hover-elevate no-underline" data-testid="link-nav-impressum">
-            Impressum
+          <Link href="/privacy-policy" className="rounded-md px-3 py-2 font-medium text-foreground/80 hover-elevate no-underline" data-testid="link-nav-privacy-policy">
+            Privacy Policy
+          </Link>
+          <Link href="/legal-notice" className="rounded-md px-3 py-2 font-medium text-foreground/80 hover-elevate no-underline" data-testid="link-nav-legal-notice">
+            Legal Notice
           </Link>
         </nav>
       </div>
@@ -45,7 +48,8 @@ export function SiteFooter() {
               <ul className="space-y-2">
                 <li><Link href="/results" className="text-primary-foreground/85 no-underline hover:text-accent" data-testid="link-footer-explore">Explore spots</Link></li>
                 <li><Link href="/methodology" className="text-primary-foreground/85 no-underline hover:text-accent" data-testid="link-footer-methodology">Methodology</Link></li>
-                <li><Link href="/impressum" className="text-primary-foreground/85 no-underline hover:text-accent" data-testid="link-footer-impressum">Impressum</Link></li>
+                <li><Link href="/privacy-policy" className="text-primary-foreground/85 no-underline hover:text-accent" data-testid="link-footer-privacy-policy">Privacy Policy</Link></li>
+                <li><Link href="/legal-notice" className="text-primary-foreground/85 no-underline hover:text-accent" data-testid="link-footer-legal-notice">Legal Notice</Link></li>
               </ul>
             </div>
           </div>

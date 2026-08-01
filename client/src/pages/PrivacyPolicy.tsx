@@ -1,7 +1,9 @@
+import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { SiteLayout } from "@/components/SiteChrome";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SitePage } from "@/lib/types";
+import { applyPageMetadata } from "@/lib/metadata";
 
 function Paragraphs({ body }: { body: string }) {
   return (
@@ -20,14 +22,23 @@ function Paragraphs({ body }: { body: string }) {
 }
 
 export default function PrivacyPolicy() {
-  const { data: page, isLoading } = useQuery<SitePage>({ queryKey: ["/api/pages/privacy"] });
+  useEffect(() => {
+    applyPageMetadata(
+      "Privacy Policy | Kite Compass",
+      "Learn how Kite Compass handles data and protects your privacy.",
+      "index,follow",
+    );
+  }, []);
+
+  const previewQuery = typeof window !== "undefined" && window.location.search.includes("preview=1") ? "?preview=1" : "";
+  const { data: page, isLoading } = useQuery<SitePage>({ queryKey: [`/api/pages/privacy-policy${previewQuery}`] });
 
   return (
     <SiteLayout>
       <div className="mx-auto max-w-3xl px-5 py-12 md:px-8">
         <div className="rounded-3xl border border-card-border bg-card p-6 md:p-8">
-          <h1 className="font-serif text-4xl font-semibold text-foreground">{page?.title || "Privacy Policy"}</h1>
-          <p className="mt-3 text-sm text-muted-foreground">Editable in the admin interface.</p>
+          <h1 className="font-serif text-4xl font-semibold text-foreground">Privacy Policy</h1>
+          <p className="mt-3 text-sm text-muted-foreground">Published information about data protection and privacy handling.</p>
           <div className="mt-8">
             {isLoading ? (
               <Skeleton className="h-48 w-full rounded-2xl" />

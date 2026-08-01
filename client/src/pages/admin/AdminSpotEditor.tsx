@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useLocation, useRoute } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
@@ -12,8 +12,8 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
-import { SpotDetail, MonthlyRecord, MONTHS, tagLabel, School, Stay } from "@/lib/types";
-import { ArrowLeft, Eye, Save, Trash2, Upload, Plus, CloudDownload, RefreshCw, CheckCircle2, AlertTriangle, CheckCheck } from "lucide-react";
+import { SpotDetail, MonthlyRecord, MONTHS, tagLabel, School, Stay, SCHOOL_SPORTS, STAY_TYPES } from "@/lib/types";
+import { ArrowLeft, Eye, Save, Trash2, Upload, Plus, CloudDownload, RefreshCw, CheckCircle2, AlertTriangle, CheckCheck, ChevronUp, ChevronDown, Link as LinkIcon } from "lucide-react";
 
 const SPOT_TYPES = ["flat-water", "chop", "waves", "lagoon", "foil", "freestyle"];
 const RIDER_LEVELS = ["beginner", "intermediate", "advanced"];
@@ -366,30 +366,22 @@ export default function AdminSpotEditor() {
         </Section>
 
         {/* Linked schools */}
-        <Section title="Schools" hint={savedId ? "Shown on the public spot page when present" : "Save the spot first to add schools"}>
-          {savedId && <LinkedEntityEditor
+        <Section title="Schools" hint={savedId ? "Assigned kite schools (drag to reorder, max 3 shown publicly)" : "Save the spot first to manage schools"}>
+          {savedId && <SpotListingEditor
             kind="school"
             spotId={savedId}
             items={schools}
             setItems={setSchools}
-            createPath="/api/admin/schools"
-            updatePathPrefix="/api/admin/schools"
-            publishPathPrefix="/api/admin/schools"
-            deletePathPrefix="/api/admin/schools"
           />}
         </Section>
 
         {/* Linked stays */}
-        <Section title="Stays" hint={savedId ? "Shown on the public spot page when present" : "Save the spot first to add stays"}>
-          {savedId && <LinkedEntityEditor
+        <Section title="Stays" hint={savedId ? "Assigned stays (drag to reorder, max 3 shown publicly)" : "Save the spot first to manage stays"}>
+          {savedId && <SpotListingEditor
             kind="stay"
             spotId={savedId}
             items={stays}
             setItems={setStays}
-            createPath="/api/admin/stays"
-            updatePathPrefix="/api/admin/stays"
-            publishPathPrefix="/api/admin/stays"
-            deletePathPrefix="/api/admin/stays"
           />}
         </Section>
       </div>
@@ -486,6 +478,228 @@ function MonthlyRow({ rec, autoMode, onChange, onSave, onPublish, onDelete }: {
 }
 function SmallField({ label, children }: { label: string; children: React.ReactNode }) {
   return <div><label className="mb-1 block text-xs text-muted-foreground">{label}</label>{children}</div>;
+}
+
+function SpotListingEditor({ kind, spotId, items, setItems }: {
+  kind: "school" | "stay";
+  spotId: number;
+  items: any[];
+  setItems: React.Dispatch<React.SetStateAction<any[]>>;
+}) {
+  const { toast } = useToast();
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [showAssignSearch, setShowAssignSearch] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [expanded, setExpanded] = useState<Record<number, boolean>>({});
+
+  const basePath = `/api/admin/spots/${spotId}/${kind === "school" ? "school" : "stay"}-assignments`;
+
+  const reload = useCallback(async () => {
+    const rows = await api<any[]>("GET", basePath);
+    setItems(rows);
+  }, [basePath, setItems]);
+
+  const createAndAssign = async () => {
+    if (!newName.trim()) return;
+    try {
+      await api("POST", `${basePath}/create-and-assign`, { name: newName.trim() });
+      await reload();
+      setNewName(""); setShowCreateForm(false);
+      toast({ title: `${kind === "school" ? "School" : "Stay"} created and assigned` });
+    } catch (e: any) { toast({ title: "Failed", description: String(e.message || e), variant: "destructive" }); }
+  };
+
+  const searchListings = async (q: string) => {
+    setSearchQuery(q);
+    if (!q.trim()) { setSearchResults([]); return; }
+    try {
+      const listPath = kind === "school" ? "/api/admin/listings/schools" : "/api/admin/listings/stays";
+      const result = await api<any>("GET", `${listPath}?search=${encodeURIComponent(q)}&perPage=20`);
+      // Filter out already-assigned ones
+      const assignedIds = new Set(items.map((i: any) => i.id));
+      setSearchResults((result.items || []).filter((r: any) => !assignedIds.has(r.id)));
+    } catch { setSearchResults([]); }
+  };
+
+  const assignExisting = async (id: number) => {
+    try {
+      await api("POST", `${basePath}/assign`, kind === "school" ? { schoolId: id } : { stayId: id });
+      await reload();
+      setShowAssignSearch(false); setSearchQuery(""); setSearchResults([]);
+      toast({ title: "Assigned" });
+    } catch (e: any) {
+      const msg = String((e as any).message || e);
+      toast({ title: msg.includes("already assigned") ? "Already assigned to this spot" : "Failed", description: msg, variant: "destructive" });
+    }
+  };
+
+  const unassign = async (id: number) => {
+    await api("DELETE", `${basePath}/${id}`);
+    await reload();
+    toast({ title: "Removed from spot" });
+  };
+
+  const moveUp = async (idx: number) => {
+    if (idx === 0) return;
+    const next = [...items];
+    [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
+    setItems(next);
+    await api("PATCH", `${basePath}/reorder`, { orderedIds: next.map((i: any) => i.id) });
+  };
+
+  const moveDown = async (idx: number) => {
+    if (idx >= items.length - 1) return;
+    const next = [...items];
+    [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
+    setItems(next);
+    await api("PATCH", `${basePath}/reorder`, { orderedIds: next.map((i: any) => i.id) });
+  };
+
+  const update = async (id: number, patch: any) => {
+    const listPath = kind === "school" ? `/api/admin/listings/schools/${id}` : `/api/admin/listings/stays/${id}`;
+    const updated = await api<any>("PATCH", listPath, patch);
+    setItems(prev => prev.map(item => item.id === id ? { ...item, ...updated } : item));
+  };
+
+  const publish = async (id: number) => {
+    const listPath = kind === "school" ? `/api/admin/listings/schools/${id}/publish` : `/api/admin/listings/stays/${id}/publish`;
+    const updated = await api<any>("POST", listPath);
+    setItems(prev => prev.map(item => item.id === id ? { ...item, ...updated } : item));
+    toast({ title: "Published" });
+  };
+
+  const toggleExpanded = (id: number) => setExpanded(e => ({ ...e, [id]: !e[id] }));
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap gap-2">
+        <Button variant="outline" size="sm" onClick={() => { setShowCreateForm(v => !v); setShowAssignSearch(false); }} className="gap-2">
+          <Plus className="h-4 w-4" /> Create &amp; assign
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => { setShowAssignSearch(v => !v); setShowCreateForm(false); }} className="gap-2">
+          <LinkIcon className="h-4 w-4" /> Assign existing
+        </Button>
+      </div>
+
+      {showCreateForm && (
+        <div className="flex items-center gap-2 rounded-xl border border-border p-3">
+          <Input placeholder={`${kind === "school" ? "School" : "Stay"} name`} value={newName} onChange={e => setNewName(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") createAndAssign(); }} className="flex-1" autoFocus />
+          <Button size="sm" onClick={createAndAssign} disabled={!newName.trim()}>Create</Button>
+          <Button size="sm" variant="ghost" onClick={() => { setShowCreateForm(false); setNewName(""); }}>Cancel</Button>
+        </div>
+      )}
+
+      {showAssignSearch && (
+        <div className="rounded-xl border border-border p-3 space-y-2">
+          <Input placeholder={`Search ${kind === "school" ? "schools" : "stays"}…`} value={searchQuery}
+            onChange={e => searchListings(e.target.value)} autoFocus />
+          {searchResults.length > 0 ? (
+            <div className="divide-y divide-border rounded-lg border border-border">
+              {searchResults.map(r => (
+                <button key={r.id} onClick={() => assignExisting(r.id)}
+                  className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-accent">
+                  <span>{r.name}</span>
+                  <span className="text-xs text-muted-foreground">{r.published ? "Published" : "Draft"}</span>
+                </button>
+              ))}
+            </div>
+          ) : searchQuery ? (
+            <p className="text-sm text-muted-foreground">No results</p>
+          ) : null}
+          <Button size="sm" variant="ghost" onClick={() => { setShowAssignSearch(false); setSearchQuery(""); setSearchResults([]); }}>Cancel</Button>
+        </div>
+      )}
+
+      {items.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No {kind === "school" ? "schools" : "stays"} assigned.</p>
+      ) : items.map((item, idx) => (
+        <div key={item.id} className="rounded-xl border border-border">
+          <div className="flex items-center gap-2 p-3">
+            <div className="flex flex-col gap-0.5">
+              <button onClick={() => moveUp(idx)} disabled={idx === 0} className="rounded p-0.5 text-muted-foreground hover:text-foreground disabled:opacity-30"><ChevronUp className="h-4 w-4" /></button>
+              <button onClick={() => moveDown(idx)} disabled={idx === items.length - 1} className="rounded p-0.5 text-muted-foreground hover:text-foreground disabled:opacity-30"><ChevronDown className="h-4 w-4" /></button>
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="font-medium text-foreground truncate">{item.name}</div>
+              <div className="text-xs text-muted-foreground">
+                {item.published && !item.hasDraft ? "Published" : item.published ? "Draft edits" : "Draft"}
+                {idx < 3 && <span className="ml-1.5 text-emerald-700">· visible publicly</span>}
+              </div>
+            </div>
+            <div className="flex items-center gap-1 shrink-0">
+              <Button size="sm" variant="ghost" onClick={() => toggleExpanded(item.id)}>
+                {expanded[item.id] ? "Less" : "Edit"}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => publish(item.id)} title="Publish">
+                <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => unassign(item.id)} title="Remove from spot">
+                <Trash2 className="h-4 w-4 text-destructive" />
+              </Button>
+            </div>
+          </div>
+
+          {expanded[item.id] && (
+            <div className="border-t border-border px-4 pb-4 pt-3 space-y-3">
+              <div className="grid gap-3 md:grid-cols-2">
+                <SmallField label="Name">
+                  <Input value={item.name} onChange={e => update(item.id, { name: e.target.value })} />
+                </SmallField>
+                <SmallField label="Website">
+                  <Input value={item.websiteUrl || ""} onChange={e => update(item.id, { websiteUrl: e.target.value })} />
+                </SmallField>
+                <SmallField label="Google Maps link">
+                  <Input value={item.mapUrl || ""} onChange={e => update(item.id, { mapUrl: e.target.value })} />
+                </SmallField>
+                {kind === "stay" && (
+                  <SmallField label="Type">
+                    <select value={item.type || ""} onChange={e => update(item.id, { type: e.target.value })}
+                      className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm">
+                      <option value="">— Select type —</option>
+                      {STAY_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                  </SmallField>
+                )}
+              </div>
+              {kind === "school" && (
+                <div>
+                  <label className="mb-1 block text-xs text-muted-foreground">Sports</label>
+                  <div className="flex flex-wrap gap-2">
+                    {SCHOOL_SPORTS.map(s => (
+                      <button key={s} type="button"
+                        onClick={() => {
+                          const sp: string[] = Array.isArray(item.sports) ? item.sports : [];
+                          update(item.id, { sports: sp.includes(s) ? sp.filter(x => x !== s) : [...sp, s] });
+                        }}
+                        className={`rounded-full border px-3 py-1 text-xs ${(Array.isArray(item.sports) ? item.sports : []).includes(s) ? "border-primary bg-primary text-primary-foreground" : "border-border hover-elevate"}`}>
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div className="grid gap-3 md:grid-cols-2">
+                <SmallField label="Short description (max 300 chars)">
+                  <Textarea rows={2} maxLength={300} value={item.shortDescription || ""} onChange={e => update(item.id, { shortDescription: e.target.value })} />
+                </SmallField>
+                <div className="space-y-2 pt-6">
+                  {kind === "school" && (
+                    <>
+                      <label className="flex items-center gap-2 text-sm"><Checkbox checked={!!item.offersLessons} onCheckedChange={c => update(item.id, { offersLessons: !!c })} /> Lessons</label>
+                      <label className="flex items-center gap-2 text-sm"><Checkbox checked={!!item.offersRental} onCheckedChange={c => update(item.id, { offersRental: !!c })} /> Rental</label>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function LinkedEntityEditor({ kind, spotId, items, setItems, createPath, updatePathPrefix, publishPathPrefix, deletePathPrefix }: {
