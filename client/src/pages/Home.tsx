@@ -7,18 +7,13 @@ import { FilterState, emptyFilters } from "@/components/Filters";
 import { filtersToParams } from "@/lib/filterParams";
 import { SpotMap, MapPoint } from "@/components/SpotMap";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Search, Wind, Compass, Waves } from "lucide-react";
+import { Search, Wind, Compass, Waves, SlidersHorizontal } from "lucide-react";
 import heroImg from "@/assets/hero.jpg";
-import { SpotListItem, MONTHS, tagLabel } from "@/lib/types";
-
-const QUICK_TYPES = ["flat-water", "waves", "freestyle", "foil"];
+import { SpotListItem, MONTHS } from "@/lib/types";
 
 export default function Home() {
   const [, navigate] = useLocation();
-  const [query, setQuery] = useState("");
   const [months, setMonths] = useState<string[]>([]);
-  const [types, setTypes] = useState<string[]>([]);
 
   const { data: allSpots } = useQuery<SpotListItem[]>({ queryKey: ["/api/spots"] });
 
@@ -29,13 +24,16 @@ export default function Home() {
   [allSpots]);
 
   const search = () => {
-    const f: FilterState = { ...emptyFilters, query, months, spotType: types };
+    const f: FilterState = { ...emptyFilters, months };
     const qs = filtersToParams(f).toString();
     navigate(`/results${qs ? `?${qs}` : ""}`);
   };
 
-  const toggleType = (t: string) =>
-    setTypes(p => p.includes(t) ? p.filter(x => x !== t) : [...p, t]);
+  const moreFilters = () => {
+    const f: FilterState = { ...emptyFilters, months };
+    const qs = filtersToParams(f).toString();
+    navigate(`/results${qs ? `?${qs}` : ""}`);
+  };
 
   return (
     <SiteLayout>
@@ -59,37 +57,16 @@ export default function Home() {
             wind, conditions and travel vibe — so you're on the water when it counts.
           </p>
 
-          {/* Search card */}
-          <div className="mx-auto mt-9 max-w-3xl rounded-2xl border border-white/40 bg-background/95 p-4 text-left shadow-2xl backdrop-blur md:p-6">
-            <div className="grid gap-4 md:grid-cols-[1fr_1fr_auto] md:items-end">
-              <MonthPicker value={months} onChange={setMonths} label="When do you want to go?" />
-              <div>
-                <label className="mb-2 block text-sm font-medium text-foreground">Where do you want to go?</label>
-                <Input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search by spot, region or country" data-testid="input-hero-search" />
-              </div>
-              <Button size="lg" onClick={search} className="h-11 gap-2 md:w-auto" data-testid="button-hero-search">
-                <Search className="h-4 w-4" /> Find spots
+          {/* Search card — spec §4.2: month selector + More filters + Find kite spots */}
+          <div className="mx-auto mt-9 max-w-xl rounded-2xl border border-white/40 bg-background/95 p-4 text-left shadow-2xl backdrop-blur md:p-6">
+            <MonthPicker value={months} onChange={setMonths} label="When do you want to go?" />
+            <div className="mt-4 flex gap-3">
+              <Button variant="outline" onClick={moreFilters} className="gap-2" data-testid="button-more-filters">
+                <SlidersHorizontal className="h-4 w-4" /> More filters
               </Button>
-            </div>
-
-            {/* optional quick filters */}
-            <div className="mt-4 border-t border-border pt-4">
-              <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Refine (optional)</div>
-              <div className="flex flex-wrap items-center gap-2">
-                {QUICK_TYPES.map(t => (
-                  <button
-                    key={t}
-                    type="button"
-                    onClick={() => toggleType(t)}
-                    data-testid={`quick-type-${t}`}
-                    className={`rounded-full border px-3 py-1 text-sm transition-colors ${
-                      types.includes(t) ? "border-primary bg-primary text-primary-foreground" : "border-border bg-background text-foreground/80 hover-elevate"
-                    }`}
-                  >
-                    {tagLabel(t)}
-                  </button>
-                ))}
-              </div>
+              <Button onClick={search} className="flex-1 gap-2" data-testid="button-hero-search">
+                <Search className="h-4 w-4" /> Find kite spots
+              </Button>
             </div>
           </div>
         </div>
