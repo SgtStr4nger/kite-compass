@@ -272,6 +272,27 @@ export const insertSeoSettingsSchema = createInsertSchema(seoSettings).omit({ id
 export type InsertSeoSettings = z.infer<typeof insertSeoSettingsSchema>;
 export type SeoSettings = typeof seoSettings.$inferSelect;
 
+/* ─────────────── Redirects (spec §29) ─────────────── */
+export const redirects = sqliteTable("redirects", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  fromPath: text("from_path").notNull().unique(),
+  toUrl: text("to_url").notNull(),
+  targetType: text("target_type").notNull(), // 'spot' | 'manual'
+  spotId: integer("spot_id"),
+  isBroken: integer("is_broken", { mode: "boolean" }).notNull().default(false),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+export const insertRedirectSchema = createInsertSchema(redirects).omit({
+  id: true, createdAt: true, updatedAt: true,
+}).partial().extend({
+  fromPath: z.string().min(1),
+  toUrl: z.string().min(1),
+  targetType: z.union([z.literal("spot"), z.literal("manual")]),
+});
+export type InsertRedirect = z.infer<typeof insertRedirectSchema>;
+export type Redirect = typeof redirects.$inferSelect;
+
 /* ─────────────── Dynamic filter definitions ───────────────
  * Filterable fields are described in the DB so new filters can be added
  * without frontend rework. The frontend renders controls from this config.

@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import { and, eq } from "drizzle-orm";
 import * as XLSX from "xlsx";
 import { db, storage, sqlite } from "./storage";
-import type { ListingsFilter, SeoContent, TrashCategory } from "./storage";
+import type { ListingsFilter, SeoContent, TrashCategory, RedirectRow } from "./storage";
 import { enrichSpotById, MissingCoordinatesError } from "./services/enrichment";
 import { calculateAutoMonthlyScore, deriveSeasonLabelFromScore, resolveMonthlyScore } from "@shared/scoring";
 import { insertSpotSchema, insertMonthlySchema, monthlyRecords, schools, spots, stays, spotSchools, spotStays } from "@shared/schema";
@@ -641,6 +641,16 @@ function parseStayRow(values: Record<string, string>, knownStayIds: Set<number>,
 }
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
+  // ── Redirect middleware (spec §29): 301 for non-broken, non-API paths ──
+  app.use((req, _res, next) => {
+    if (req.path.startsWith('/api/')) return next();
+    const match = sqlite.prepare(
+      `SELECT to_url FROM redirects WHERE from_path = ? AND is_broken = 0`
+    ).get(req.path) as { to_url: string } | undefined;
+    if (match) return _res.redirect(301, match.to_url);
+    next();
+  });
+
   app.get("/robots.txt", (_req, res) => {
     res.type("text/plain").send([
       "User-agent: *",
@@ -1983,6 +1993,48 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const info = await storage.getRestoreInfo(category, id);
     if (!info) return res.status(404).json({ error: "not found in trash" });
     await storage.permanentDeleteEntity(category, id);
+    res.json({ ok: true });
+  });
+
+  // ── Redirects admin (spec §29) ──
+  app.get("/api/admin/redirects", requireAuth, async (_req, res) => {
+    const items = await storage.listRedirects();
+    const spotIds = Array.from(new Set(items.filter(r => r.spotId != null).map(r => r.spotId!)));
+    const spotNames: Record<number, string> = {};
+    if (spotIds.length) {
+      const placeholders = spotIds.map(() => "?").join(",");
+      const rows = sqlite.prepare(`SELECT id, name FROM spots WHERE id IN (${placeholders})`).all(...spotIds) as { id: number; name: string }[];
+      rows.forEach(r => { spotNames[r.id] = r.name; });
+    }
+    res.json(items.map(r => ({ ...r, spotName: r.spotId != null ? (spotNames[r.spotId] ?? null) : null })));
+  });
+
+  app.post("/api/admin/redirects", requireAuth, async (req, res) => {
+    const { fromPath, toUrl, targetType, spotId } = req.body || {};
+    if (!fromPath || !toUrl || !targetType) return res.status(400).json({ error: "fromPath, toUrl, targetType required" });
+    if (targetType !== "spot" && targetType !== "manual") return res.status(400).json({ error: "targetType must be 'spot' or 'manual'" });
+    const conflict = await storage.checkRedirectConflicts(String(fromPath), String(toUrl));
+    if (conflict) return res.status(409).json({ error: conflict.reason });
+    const created = await storage.createRedirect({ fromPath: String(fromPath), toUrl: String(toUrl), targetType, spotId: spotId != null ? Number(spotId) : null });
+    const spotNameRow = created.spotId != null ? sqlite.prepare(`SELECT name FROM spots WHERE id = ?`).get(created.spotId) as { name: string } | undefined : undefined;
+    res.json({ ...created, spotName: spotNameRow?.name ?? null });
+  });
+
+  app.patch("/api/admin/redirects/:id", requireAuth, async (req, res) => {
+    const id = Number(req.params.id);
+    const { fromPath, toUrl, targetType, spotId } = req.body || {};
+    if (!fromPath || !toUrl || !targetType) return res.status(400).json({ error: "fromPath, toUrl, targetType required" });
+    if (targetType !== "spot" && targetType !== "manual") return res.status(400).json({ error: "targetType must be 'spot' or 'manual'" });
+    const conflict = await storage.checkRedirectConflicts(String(fromPath), String(toUrl), id);
+    if (conflict) return res.status(409).json({ error: conflict.reason });
+    const updated = await storage.updateRedirect(id, { fromPath: String(fromPath), toUrl: String(toUrl), targetType, spotId: spotId != null ? Number(spotId) : null });
+    if (!updated) return res.status(404).json({ error: "not found" });
+    const spotNameRow = updated.spotId != null ? sqlite.prepare(`SELECT name FROM spots WHERE id = ?`).get(updated.spotId) as { name: string } | undefined : undefined;
+    res.json({ ...updated, spotName: spotNameRow?.name ?? null });
+  });
+
+  app.delete("/api/admin/redirects/:id", requireAuth, async (req, res) => {
+    await storage.deleteRedirect(Number(req.params.id));
     res.json({ ok: true });
   });
 

@@ -293,6 +293,18 @@ export interface RestoreInfo {
   affectedItems: Array<{ id: number; name: string; recoverable: boolean }>;
 }
 
+export interface Redirect {
+  id: number;
+  fromPath: string;
+  toUrl: string;
+  targetType: 'spot' | 'manual';
+  spotId: number | null;
+  spotName: string | null;
+  isBroken: boolean;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
 export const MONTHS = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",

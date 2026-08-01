@@ -249,6 +249,16 @@ sqlite.exec(`
     created_at TEXT,
     updated_at TEXT
   );
+  CREATE TABLE IF NOT EXISTS redirects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_path TEXT NOT NULL UNIQUE,
+    to_url TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    spot_id INTEGER,
+    is_broken INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT,
+    updated_at TEXT
+  );
 `);
 
 // Migrate existing schools/stays with spot_id into the assignment tables
@@ -583,6 +593,24 @@ export interface AdminUserSummary {
 }
 
 export type TrashCategory = "spots" | "schools" | "stays";
+
+export interface RedirectRow {
+  id: number;
+  fromPath: string;
+  toUrl: string;
+  targetType: string;
+  spotId: number | null;
+  isBroken: boolean;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface CreateRedirectInput {
+  fromPath: string;
+  toUrl: string;
+  targetType: 'spot' | 'manual';
+  spotId?: number | null;
+}
 export interface TrashItem {
   category: TrashCategory;
   id: number;
@@ -679,6 +707,12 @@ export interface IStorage {
   getRestoreInfo(category: TrashCategory, id: number): Promise<RestoreInfo | undefined>;
   restoreEntity(category: TrashCategory, id: number): Promise<void>;
   permanentDeleteEntity(category: TrashCategory, id: number): Promise<void>;
+  // redirects (spec §29)
+  listRedirects(): Promise<RedirectRow[]>;
+  createRedirect(r: CreateRedirectInput): Promise<RedirectRow>;
+  updateRedirect(id: number, r: Partial<CreateRedirectInput>): Promise<RedirectRow | undefined>;
+  deleteRedirect(id: number): Promise<void>;
+  checkRedirectConflicts(fromPath: string, toUrl: string, excludeId?: number): Promise<{ reason: string } | null>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -751,9 +785,20 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(spots).where(and(eq(spots.slug, slug), isNull(spots.deletedAt))).get();
   }
   async createSpot(s: InsertSpot) {
+    // Real page wins: remove any redirect whose from_path matches this spot's path.
+    if (s.slug) {
+      sqlite.prepare(`DELETE FROM redirects WHERE from_path = ?`).run('/spots/' + s.slug);
+    }
     return db.insert(spots).values({ ...s, publicId: (s as any).publicId || crypto.randomUUID(), published: false, hasDraft: true, createdAt: now(), updatedAt: now() } as any).returning().get();
   }
   async updateSpot(id: number, s: Partial<InsertSpot>) {
+    if (s.slug !== undefined) {
+      // Spot-linked redirects follow future slug changes.
+      sqlite.prepare(`UPDATE redirects SET to_url = ?, updated_at = ? WHERE target_type = 'spot' AND spot_id = ?`)
+        .run('/spots/' + s.slug, now(), id);
+      // Real page wins: remove any redirect whose from_path matches the new slug path.
+      sqlite.prepare(`DELETE FROM redirects WHERE from_path = ?`).run('/spots/' + s.slug);
+    }
     return db.update(spots).set({ ...s, hasDraft: true, updatedAt: now() } as any).where(eq(spots.id, id)).returning().get();
   }
   async publishSpot(id: number) {
@@ -769,6 +814,9 @@ export class DatabaseStorage implements IStorage {
     // Remove spot-level assignments so the spot no longer appears in listings on other spot pages.
     db.delete(spotSchools).where(eq(spotSchools.spotId, id)).run();
     db.delete(spotStays).where(eq(spotStays.spotId, id)).run();
+    // Mark spot-linked redirects as broken (disabled publicly until restoration).
+    sqlite.prepare(`UPDATE redirects SET is_broken = 1, updated_at = ? WHERE target_type = 'spot' AND spot_id = ?`)
+      .run(now(), id);
   }
 
   async listMonthly(spotId: number, publishedOnly: boolean) {
@@ -1150,6 +1198,9 @@ export class DatabaseStorage implements IStorage {
     const timestamp = now();
     if (category === "spots") {
       db.update(spots).set({ published: false, hasDraft: true, deletedAt: null, updatedAt: timestamp } as any).where(eq(spots.id, id)).run();
+      // Un-break spot-linked redirects on restoration.
+      sqlite.prepare(`UPDATE redirects SET is_broken = 0, updated_at = ? WHERE target_type = 'spot' AND spot_id = ?`)
+        .run(timestamp, id);
     } else if (category === "schools") {
       db.update(schools).set({ published: false, hasDraft: true, deletedAt: null, updatedAt: timestamp } as any).where(eq(schools.id, id)).run();
     } else if (category === "stays") {
@@ -1162,6 +1213,7 @@ export class DatabaseStorage implements IStorage {
       sqlite.prepare(`DELETE FROM monthly_records WHERE spot_id = ?`).run(id);
       sqlite.prepare(`DELETE FROM spot_schools WHERE spot_id = ?`).run(id);
       sqlite.prepare(`DELETE FROM spot_stays WHERE spot_id = ?`).run(id);
+      sqlite.prepare(`DELETE FROM redirects WHERE spot_id = ?`).run(id);
       db.delete(spots).where(eq(spots.id, id)).run();
     } else if (category === "schools") {
       sqlite.prepare(`DELETE FROM spot_schools WHERE school_id = ?`).run(id);
@@ -1170,6 +1222,72 @@ export class DatabaseStorage implements IStorage {
       sqlite.prepare(`DELETE FROM spot_stays WHERE stay_id = ?`).run(id);
       db.delete(stays).where(eq(stays.id, id)).run();
     }
+  }
+  // ── Redirects (spec §29) ──
+
+  private _redirectFromRow(r: any): RedirectRow {
+    return {
+      id: r.id,
+      fromPath: r.from_path,
+      toUrl: r.to_url,
+      targetType: r.target_type,
+      spotId: r.spot_id ?? null,
+      isBroken: !!r.is_broken,
+      createdAt: r.created_at ?? null,
+      updatedAt: r.updated_at ?? null,
+    };
+  }
+
+  async listRedirects(): Promise<RedirectRow[]> {
+    const rows = sqlite.prepare(
+      `SELECT id, from_path, to_url, target_type, spot_id, is_broken, created_at, updated_at FROM redirects ORDER BY created_at DESC`
+    ).all() as any[];
+    return rows.map(r => this._redirectFromRow(r));
+  }
+
+  async createRedirect(r: CreateRedirectInput): Promise<RedirectRow> {
+    const result = sqlite.prepare(
+      `INSERT INTO redirects (from_path, to_url, target_type, spot_id, is_broken, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?)`
+    ).run(r.fromPath, r.toUrl, r.targetType, r.spotId ?? null, now(), now());
+    const row = sqlite.prepare(
+      `SELECT id, from_path, to_url, target_type, spot_id, is_broken, created_at, updated_at FROM redirects WHERE id = ?`
+    ).get(Number(result.lastInsertRowid)) as any;
+    return this._redirectFromRow(row);
+  }
+
+  async updateRedirect(id: number, r: Partial<CreateRedirectInput>): Promise<RedirectRow | undefined> {
+    const existing = sqlite.prepare(
+      `SELECT id, from_path, to_url, target_type, spot_id, is_broken, created_at, updated_at FROM redirects WHERE id = ?`
+    ).get(id) as any;
+    if (!existing) return undefined;
+    const fromPath = r.fromPath ?? existing.from_path;
+    const toUrl = r.toUrl ?? existing.to_url;
+    const targetType = r.targetType ?? existing.target_type;
+    const spotId = 'spotId' in r ? (r.spotId ?? null) : existing.spot_id;
+    sqlite.prepare(
+      `UPDATE redirects SET from_path = ?, to_url = ?, target_type = ?, spot_id = ?, updated_at = ? WHERE id = ?`
+    ).run(fromPath, toUrl, targetType, spotId, now(), id);
+    const row = sqlite.prepare(
+      `SELECT id, from_path, to_url, target_type, spot_id, is_broken, created_at, updated_at FROM redirects WHERE id = ?`
+    ).get(id) as any;
+    return row ? this._redirectFromRow(row) : undefined;
+  }
+
+  async deleteRedirect(id: number): Promise<void> {
+    sqlite.prepare(`DELETE FROM redirects WHERE id = ?`).run(id);
+  }
+
+  async checkRedirectConflicts(fromPath: string, toUrl: string, excludeId?: number): Promise<{ reason: string } | null> {
+    const dupRow = excludeId !== undefined
+      ? sqlite.prepare(`SELECT id FROM redirects WHERE from_path = ? AND id != ?`).get(fromPath, excludeId)
+      : sqlite.prepare(`SELECT id FROM redirects WHERE from_path = ?`).get(fromPath);
+    if (dupRow) return { reason: 'duplicate_source' };
+    if (fromPath === toUrl) return { reason: 'self_redirect' };
+    const loopRow = excludeId !== undefined
+      ? sqlite.prepare(`SELECT id FROM redirects WHERE from_path = ? AND to_url = ? AND id != ?`).get(toUrl, fromPath, excludeId)
+      : sqlite.prepare(`SELECT id FROM redirects WHERE from_path = ? AND to_url = ?`).get(toUrl, fromPath);
+    if (loopRow) return { reason: 'redirect_loop' };
+    return null;
   }
 }
 
