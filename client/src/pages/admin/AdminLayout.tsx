@@ -1,15 +1,18 @@
-import { ReactNode, useEffect } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { CompassMark } from "@/components/Logo";
 import { Button } from "@/components/ui/button";
 import { LogOut, LayoutGrid, Database, FileText, ExternalLink, School, Hotel, Users, Search } from "lucide-react";
 import { applyRobotsMetadata } from "@/lib/metadata";
+import { api } from "@/lib/api";
+import { ExcelImportStatus } from "@/lib/types";
 
 export function AdminLayout({ children }: { children: ReactNode }) {
-  const { email, logout, mustChangePassword } = useAuth();
+  const { email, logout, mustChangePassword, token } = useAuth();
   const [, navigate] = useLocation();
   const [location] = useLocation();
+  const [excelStatus, setExcelStatus] = useState<ExcelImportStatus | null>(null);
 
   useEffect(() => {
     if (mustChangePassword && location !== "/admin/change-password") navigate("/admin/change-password");
@@ -18,6 +21,29 @@ export function AdminLayout({ children }: { children: ReactNode }) {
   useEffect(() => {
     applyRobotsMetadata("noindex,nofollow");
   }, []);
+
+  useEffect(() => {
+    if (!token) return;
+    let alive = true;
+    const poll = async () => {
+      try {
+        const status = await api<ExcelImportStatus>("GET", "/api/admin/excel/status");
+        if (alive) setExcelStatus(status);
+      } catch {
+        if (alive) setExcelStatus(null);
+      }
+    };
+    poll();
+    const id = window.setInterval(poll, 2000);
+    return () => { alive = false; window.clearInterval(id); };
+  }, [token]);
+
+  const dismissBanner = async () => {
+    try {
+      await api("POST", "/api/admin/excel/dismiss");
+      setExcelStatus(prev => prev ? { ...prev, dismissed: true, visible: false } : prev);
+    } catch {}
+  };
 
   const navLink = (href: string, icon: React.ReactNode, label: string, testId: string) => {
     const active = location === href || location.startsWith(href + "/");
@@ -70,6 +96,20 @@ export function AdminLayout({ children }: { children: ReactNode }) {
         </div>
       </aside>
       <div className="flex-1 overflow-x-hidden">
+        {excelStatus?.visible && (
+          <div className={`border-b px-5 py-3 text-sm md:px-8 ${excelStatus.active ? "border-amber-300 bg-amber-50 text-amber-900" : "border-emerald-300 bg-emerald-50 text-emerald-900"}`}>
+            <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
+              <div>
+                <strong>Excel import: {excelStatus.status}</strong>
+                {excelStatus.category ? <span> · {excelStatus.category}</span> : null}
+                {excelStatus.message ? <span> · {excelStatus.message}</span> : null}
+              </div>
+              {!excelStatus.active && excelStatus.dismissible && (
+                <Button size="sm" variant="outline" onClick={dismissBanner}>Dismiss</Button>
+              )}
+            </div>
+          </div>
+        )}
         <div className="mx-auto max-w-5xl px-5 py-8 md:px-8">{children}</div>
       </div>
     </div>
