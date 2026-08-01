@@ -199,6 +199,9 @@ function pruneImportFileRetention() {
     WHERE created_at < ? AND (source_file_base64 IS NOT NULL OR updates_file_base64 IS NOT NULL OR errors_file_base64 IS NOT NULL)
   `).run(cutoff);
 }
+function setNoStore(res: Response) {
+  res.setHeader("Cache-Control", "no-store");
+}
 function writeWorkbookBase64(sheetName: string, headers: readonly string[], rows: Record<string, unknown>[]): string {
   const aoa: unknown[][] = [Array.from(headers), ...rows.map(row => headers.map(h => row[h] ?? ""))];
   const wb = XLSX.utils.book_new();
@@ -740,6 +743,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.get("/api/admin/excel/status", requireAuth, async (_req, res) => {
+    setNoStore(res);
     pruneImportFileRetention();
     const row = getExcelState();
     res.json({
@@ -764,6 +768,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.get("/api/admin/excel/import/:category/history", requireAuth, async (req, res) => {
+    setNoStore(res);
     const category = String(req.params.category);
     if (!isExcelCategory(category)) return res.status(400).json({ error: "invalid category" });
     pruneImportFileRetention();
@@ -910,6 +915,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.get("/api/admin/excel/import/:category/preview-current", requireAuth, async (req, res) => {
+    setNoStore(res);
     const category = String(req.params.category);
     if (!isExcelCategory(category)) return res.status(400).json({ error: "invalid category" });
     const state = getExcelState();

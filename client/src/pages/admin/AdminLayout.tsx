@@ -25,17 +25,29 @@ export function AdminLayout({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!token) return;
     let alive = true;
+    let timerId: number | null = null;
+
+    const scheduleNext = (intervalMs: number) => {
+      if (!alive) return;
+      timerId = window.setTimeout(() => { void poll(); }, intervalMs);
+    };
+
     const poll = async () => {
       try {
         const status = await api<ExcelImportStatus>("GET", "/api/admin/excel/status");
-        if (alive) setExcelStatus(status);
+        if (!alive) return;
+        setExcelStatus(status);
+        // Active import → fast poll; terminal+dismissed → slow background check; otherwise medium
+        if (status.active) scheduleNext(2000);
+        else if (!status.visible) scheduleNext(30_000);
+        else scheduleNext(5000);
       } catch {
-        if (alive) setExcelStatus(null);
+        if (alive) { setExcelStatus(null); scheduleNext(15_000); }
       }
     };
-    poll();
-    const id = window.setInterval(poll, 2000);
-    return () => { alive = false; window.clearInterval(id); };
+
+    void poll();
+    return () => { alive = false; if (timerId !== null) window.clearTimeout(timerId); };
   }, [token]);
 
   const dismissBanner = async () => {

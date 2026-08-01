@@ -25,6 +25,7 @@ export async function api<T = any>(
   if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
   const res = await fetch(`${API_BASE}${path}`, {
     method,
+    cache: "no-store",
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
