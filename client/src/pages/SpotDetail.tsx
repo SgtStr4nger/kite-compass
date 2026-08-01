@@ -1,6 +1,10 @@
 import { useMemo } from "react";
 import { useRoute, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
+import {
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, ResponsiveContainer,
+  ReferenceLine,
+} from "recharts";
 import { SiteLayout } from "@/components/SiteChrome";
 import { SpotMap } from "@/components/SpotMap";
 import { ScoreBadge, SeasonBadge, Chip } from "@/components/Badges";
@@ -144,7 +148,7 @@ export default function SpotDetail() {
             )}
 
             {/* When it works best */}
-            <WhenItWorksBest monthly={monthlySorted} selectedMonth={selectedMonth} />
+            <WhenItWorksBest monthly={monthlySorted} selectedMonth={selectedMonth} rankingMode={spot.rankingMode} />
           </div>
 
           {/* sidebar */}
@@ -266,23 +270,21 @@ function LinkedGroup({ title, items }: { title: string; items: { name: string; n
   );
 }
 
-// ── "When it works best" — season strip + two sparklines + 12-month table ──
-function WhenItWorksBest({ monthly, selectedMonth }: { monthly: MonthlyRecord[]; selectedMonth: string | null }) {
-  // Always render all 12 months in fixed Jan–Dec order; missing months show as gaps.
+// ── "When it works best" — season strip + two charts + 12-month table ──
+function WhenItWorksBest({
+  monthly, selectedMonth, rankingMode,
+}: {
+  monthly: MonthlyRecord[];
+  selectedMonth: string | null;
+  rankingMode: string;
+}) {
   const byMonth = new Map(monthly.map(m => [m.month, m]));
   const rows = MONTHS.map(m => byMonth.get(m) ?? null);
   const hasAny = monthly.length > 0;
 
-  const windSeries = rows.map(r => (r?.avgKiteableWind10mKnots ?? r?.averageBaseWind ?? null));
-  const windyDaySeries = rows.map(r => (r?.kiteableDaysCount ?? r?.windDays ?? null));
-  const hasWaves = monthly.some(m => m.avgWaveHeightM != null);
+  const hasWindType = monthly.some(m => (m as any).primaryWindType != null);
+  const hasWaves    = monthly.some(m => m.avgWaveHeightM != null);
   const hasWavePeriod = monthly.some(m => m.avgWavePeriodS != null);
-
-  // Summary numbers for the sparkline labels.
-  const windVals = windSeries.filter((v): v is number => v != null);
-  const windyVals = windyDaySeries.filter((v): v is number => v != null);
-  const peakWind = windVals.length ? Math.max(...windVals) : null;
-  const peakWindyDays = windyVals.length ? Math.max(...windyVals) : null;
 
   if (!hasAny) {
     return (
@@ -297,7 +299,7 @@ function WhenItWorksBest({ monthly, selectedMonth }: { monthly: MonthlyRecord[];
     <section data-testid="section-when-it-works">
       <h2 className="font-serif text-2xl font-semibold text-foreground">When it works best</h2>
 
-      {/* Season strip — Jan–Dec, colour-coded by season label */}
+      {/* Season strip */}
       <div className="mt-4">
         <div className="flex gap-1" data-testid="season-strip">
           {MONTHS.map((m, i) => {
@@ -306,13 +308,12 @@ function WhenItWorksBest({ monthly, selectedMonth }: { monthly: MonthlyRecord[];
             const on = selectedMonth === m;
             return (
               <div key={m} className="flex-1 text-center" title={rec ? `${m} · ${meta?.label ?? rec.seasonLabel}` : m}>
-                <div className={`h-8 rounded-md ${meta ? meta.dot : "bg-stone-200"} ${on ? "ring-2 ring-offset-1 ring-foreground/40" : ""}`} />
+                <div className={`h-8 rounded-md ${meta ? meta.dot : "bg-stone-200"} ${on ? "ring-2 ring-offset-1 ring-foreground/60" : ""}`} />
                 <div className="mt-1 text-[10px] font-medium uppercase text-muted-foreground">{m.slice(0, 1)}</div>
               </div>
             );
           })}
         </div>
-        {/* legend */}
         <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1">
           {(["peak", "side", "off"] as const).map(k => (
             <span key={k} className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -322,33 +323,45 @@ function WhenItWorksBest({ monthly, selectedMonth }: { monthly: MonthlyRecord[];
         </div>
       </div>
 
-      {/* Two sparklines — avg wind, windy days */}
+      {/* Charts */}
       <div className="mt-6 grid gap-4 sm:grid-cols-2">
-        <SparkCard
-          label="Average kiteable wind through the year"
-          summary={peakWind != null ? `up to ${peakWind} kn` : "—"}
-          series={windSeries}
+        <MonthlyChart
+          title="Average wind"
           unit="kn"
+          data={rows.map((r, i) => ({
+            month: MONTHS[i].slice(0, 3),
+            value: r ? (r.avgKiteableWind10mKnots ?? r.averageBaseWind ?? null) : null,
+            selected: selectedMonth === MONTHS[i],
+          }))}
+          yTicks={[0, 10, 20, 30, 40]}
+          yDomain={[0, "auto"]}
         />
-        <SparkCard
-          label="Kiteable days through the year"
-          summary={peakWindyDays != null ? `up to ${peakWindyDays} / mo` : "—"}
-          series={windyDaySeries}
+        <MonthlyChart
+          title="Kiteable days"
           unit="days"
+          data={rows.map((r, i) => ({
+            month: MONTHS[i].slice(0, 3),
+            value: r ? (r.kiteableDaysCount ?? r.windDays ?? null) : null,
+            selected: selectedMonth === MONTHS[i],
+          }))}
+          yTicks={[0, 10, 20]}
+          yDomain={[0, 31]}
         />
       </div>
 
-      {/* Detailed 12-month table */}
-      <div className="mt-6 overflow-hidden rounded-2xl border border-card-border">
+      {/* Monthly table */}
+      <div className="mt-6 overflow-x-auto rounded-2xl border border-card-border">
         <table className="w-full text-sm">
           <thead className="bg-secondary/60 text-left text-xs uppercase tracking-wide text-muted-foreground">
             <tr>
-              <th className="px-4 py-3 font-medium">Month</th>
+              <th className="sticky left-0 z-10 bg-secondary/60 px-4 py-3 font-medium">Month</th>
+              <th className="px-4 py-3 text-right font-medium">Score</th>
               <th className="px-4 py-3 font-medium">Season</th>
-              <th className="px-4 py-3 text-right font-medium">Kiteable wind</th>
               <th className="px-4 py-3 text-right font-medium">Kiteable days</th>
               <th className="px-4 py-3 text-right font-medium">Hours/day</th>
-              {hasWaves && <th className="px-4 py-3 text-right font-medium">Avg wave</th>}
+              <th className="px-4 py-3 text-right font-medium">Avg wind</th>
+              {hasWindType && <th className="px-4 py-3 font-medium">Wind type</th>}
+              {hasWaves    && <th className="px-4 py-3 text-right font-medium">Wave height</th>}
               {hasWavePeriod && <th className="px-4 py-3 text-right font-medium">Wave period</th>}
             </tr>
           </thead>
@@ -356,27 +369,39 @@ function WhenItWorksBest({ monthly, selectedMonth }: { monthly: MonthlyRecord[];
             {MONTHS.map((m, i) => {
               const r = rows[i];
               const on = selectedMonth === m;
-              const cols = 5 + (hasWaves ? 1 : 0) + (hasWavePeriod ? 1 : 0);
+              const totalCols = 6 + (hasWindType ? 1 : 0) + (hasWaves ? 1 : 0) + (hasWavePeriod ? 1 : 0);
               if (!r) {
                 return (
                   <tr key={m} className="border-t border-border text-muted-foreground/70">
-                    <td className="px-4 py-3 font-medium">{m}</td>
-                    <td className="px-4 py-3" colSpan={cols - 1}>—</td>
+                    <td className={`sticky left-0 z-10 px-4 py-3 font-medium ${on ? "border-l-2 border-primary bg-accent/10" : "bg-card"}`}>{m}</td>
+                    <td className="px-4 py-3" colSpan={totalCols - 1}>—</td>
                   </tr>
                 );
               }
+              const score = resolveMonthlyScore(r, rankingMode);
               const avgWind = r.avgKiteableWind10mKnots ?? r.averageBaseWind;
               const windyDays = r.kiteableDaysCount ?? r.windDays;
               const kiteHours = r.avgKiteableHoursPerDay;
+              const primaryWT = (r as any).primaryWindType as string | null ?? null;
+              const secondaryWT = (r as any).secondaryWindType as string | null ?? null;
+              const windTypeLabel = primaryWT
+                ? secondaryWT ? `${primaryWT} / ${secondaryWT}` : primaryWT
+                : "—";
               return (
-                <tr key={m} className={`border-t border-border ${on ? "bg-accent/10" : ""}`} data-testid={`row-month-${m}`}>
-                  <td className="px-4 py-3 font-medium text-foreground">{m}</td>
+                <tr
+                  key={m}
+                  className={`border-t border-border ${on ? "bg-accent/10" : ""}`}
+                  data-testid={`row-month-${m}`}
+                >
+                  <td className={`sticky left-0 z-10 px-4 py-3 font-medium text-foreground ${on ? "border-l-2 border-primary bg-accent/10" : "bg-card"}`}>{m}</td>
+                  <td className="px-4 py-3 text-right tabular-nums">{score != null ? score.toFixed(1) : "—"}</td>
                   <td className="px-4 py-3"><SeasonBadge label={r.seasonLabel} /></td>
-                  <td className="px-4 py-3 text-right tabular-nums">{avgWind != null ? `${avgWind} kn` : "—"}</td>
-                  <td className="px-4 py-3 text-right tabular-nums">{windyDays != null ? windyDays : "—"}</td>
-                  <td className="px-4 py-3 text-right tabular-nums">{kiteHours != null ? `${kiteHours} h` : "—"}</td>
-                  {hasWaves && <td className="px-4 py-3 text-right tabular-nums">{r.avgWaveHeightM != null ? `${r.avgWaveHeightM} m` : "—"}</td>}
-                  {hasWavePeriod && <td className="px-4 py-3 text-right tabular-nums">{r.avgWavePeriodS != null ? `${r.avgWavePeriodS} s` : "—"}</td>}
+                  <td className="px-4 py-3 text-right tabular-nums">{windyDays != null ? (windyDays === 0 ? "0.0" : windyDays) : "—"}</td>
+                  <td className="px-4 py-3 text-right tabular-nums">{kiteHours != null ? (kiteHours === 0 ? "0.0" : `${kiteHours} h`) : "—"}</td>
+                  <td className="px-4 py-3 text-right tabular-nums">{avgWind != null ? (avgWind === 0 ? "0.0 kn" : `${avgWind} kn`) : "—"}</td>
+                  {hasWindType && <td className="px-4 py-3 text-muted-foreground">{windTypeLabel}</td>}
+                  {hasWaves    && <td className="px-4 py-3 text-right tabular-nums">{r.avgWaveHeightM != null ? (r.avgWaveHeightM === 0 ? "0.0 m" : `${r.avgWaveHeightM} m`) : "—"}</td>}
+                  {hasWavePeriod && <td className="px-4 py-3 text-right tabular-nums">{r.avgWavePeriodS != null ? (r.avgWavePeriodS === 0 ? "0.0 s" : `${r.avgWavePeriodS} s`) : "—"}</td>}
                 </tr>
               );
             })}
@@ -388,44 +413,76 @@ function WhenItWorksBest({ monthly, selectedMonth }: { monthly: MonthlyRecord[];
   );
 }
 
-// Compact, axis-less sparkline card. Supportive, not dominant.
-function SparkCard({ label, summary, series, unit }: { label: string; summary: string; series: (number | null)[]; unit: string }) {
-  const W = 240, H = 44, pad = 3;
-  const vals = series.map(v => (v == null ? null : v));
-  const nums = vals.filter((v): v is number => v != null);
-  const min = nums.length ? Math.min(...nums) : 0;
-  const max = nums.length ? Math.max(...nums) : 1;
-  const range = max - min || 1;
-  const n = series.length;
-  const x = (i: number) => pad + (i * (W - 2 * pad)) / (n - 1);
-  const y = (v: number) => H - pad - ((v - min) / range) * (H - 2 * pad);
-  // Build a path, breaking across null months.
-  let d = ""; let started = false;
-  vals.forEach((v, i) => {
-    if (v == null) { started = false; return; }
-    d += `${started ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)} `;
-    started = true;
-  });
-  let peakIdx = -1;
-  vals.forEach((v, i) => {
-    if (v != null && (peakIdx < 0 || (vals[peakIdx] ?? -Infinity) < v)) peakIdx = i;
-  });
-  const peakVal = peakIdx >= 0 ? vals[peakIdx] : null;
+// ── Monthly chart (area + axes, spec §10.2) ──────────────────────────────────
+type ChartDataPoint = { month: string; value: number | null; selected: boolean };
+
+function MonthlyChart({
+  title, unit, data, yTicks, yDomain,
+}: {
+  title: string;
+  unit: string;
+  data: ChartDataPoint[];
+  yTicks: number[];
+  yDomain: [number | string, number | string];
+}) {
+  const xLabels = new Set(["Jan", "Apr", "Jul", "Oct"]);
+  // Selected month indices for reference lines.
+  const selectedMonths = data.map((d, i) => (d.selected ? i : -1)).filter(i => i >= 0);
+
   return (
     <div className="rounded-2xl border border-card-border bg-card p-4">
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="text-sm font-medium text-foreground">{label}</span>
-        <span className="text-xs tabular-nums text-muted-foreground">{summary}</span>
-      </div>
-      <svg viewBox={`0 0 ${W} ${H}`} className="mt-2 h-11 w-full" preserveAspectRatio="none" aria-hidden="true">
-        <path d={d} fill="none" stroke="hsl(var(--primary))" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" />
-        {peakVal != null && (
-          <circle cx={x(peakIdx)} cy={y(peakVal)} r={2.4} fill="hsl(var(--primary))" />
-        )}
-      </svg>
-      <div className="mt-1 flex justify-between text-[10px] uppercase tracking-wide text-muted-foreground/70">
-        <span>Jan</span><span>Dec</span>
-      </div>
+      <div className="mb-2 text-sm font-medium text-foreground">{title}</div>
+      <ResponsiveContainer width="100%" height={120}>
+        <AreaChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: -16 }}>
+          <defs>
+            <linearGradient id={`grad-${title}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.18} />
+              <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid vertical={false} stroke="hsl(var(--border))" strokeDasharray="3 3" />
+          {/* Selected-month highlight bands */}
+          {selectedMonths.map(idx => (
+            <ReferenceLine
+              key={idx}
+              x={data[idx].month}
+              stroke="hsl(var(--primary))"
+              strokeOpacity={0.15}
+              strokeWidth={20}
+            />
+          ))}
+          <XAxis
+            dataKey="month"
+            tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
+            axisLine={false}
+            tickLine={false}
+            tickFormatter={(v) => xLabels.has(v) ? v : ""}
+          />
+          <YAxis
+            domain={yDomain}
+            ticks={yTicks}
+            tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
+            axisLine={false}
+            tickLine={false}
+            tickFormatter={(v) => v === 0 ? "0" : `${v}`}
+          />
+          <Area
+            type="monotone"
+            dataKey="value"
+            stroke="hsl(var(--primary))"
+            strokeWidth={1.75}
+            fill={`url(#grad-${title})`}
+            connectNulls={false}
+            dot={(props: any) => {
+              const { cx, cy, payload } = props;
+              if (payload?.value == null) return <g key={`dot-${props.index}`} />;
+              const r = payload.selected ? 4 : 2;
+              return <circle key={`dot-${props.index}`} cx={cx} cy={cy} r={r} fill="hsl(var(--primary))" stroke="none" />;
+            }}
+            activeDot={false}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
     </div>
   );
 }
