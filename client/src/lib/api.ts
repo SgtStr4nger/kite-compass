@@ -3,8 +3,17 @@
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
 let authToken: string | null = null;
+let onTokenRefresh: ((token: string) => void) | null = null;
+let onSessionExpired: (() => void) | null = null;
 export function setAuthToken(t: string | null) { authToken = t; }
 export function getAuthToken() { return authToken; }
+export function setAuthCallbacks(callbacks: {
+  onTokenRefresh?: (token: string) => void;
+  onSessionExpired?: () => void;
+}) {
+  onTokenRefresh = callbacks.onTokenRefresh ?? null;
+  onSessionExpired = callbacks.onSessionExpired ?? null;
+}
 
 export async function api<T = any>(
   method: string,
@@ -19,9 +28,19 @@ export async function api<T = any>(
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
+  const refreshedToken = res.headers.get("x-auth-token");
+  if (refreshedToken) {
+    authToken = refreshedToken;
+    onTokenRefresh?.(refreshedToken);
+  }
   if (!res.ok) {
     let msg = res.statusText;
-    try { const j = await res.json(); msg = (j as any).error ? JSON.stringify((j as any).error) : msg; } catch {}
+    try {
+      const j = await res.json();
+      const err = (j as any).error;
+      msg = err ? JSON.stringify(err) : msg;
+      if (res.status === 401 && err === "session expired") onSessionExpired?.();
+    } catch {}
     throw new Error(`${res.status}: ${msg}`);
   }
   const text = await res.text();

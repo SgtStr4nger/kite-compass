@@ -1,13 +1,14 @@
-import { users, spots, monthlyRecords, filterDefs, schools, stays, sitePages } from '@shared/schema';
+import { users, spots, monthlyRecords, filterDefs, schools, stays, sitePages, legalPages, spotSchools, spotStays } from '@shared/schema';
 import type {
   User, InsertUser, Spot, InsertSpot, MonthlyRecord, InsertMonthly,
   School, InsertSchool, Stay, InsertStay,
-  SitePage, InsertSitePage,
+  SitePage, InsertSitePage, LegalPage,
   FilterDef, InsertFilterDef,
+  SpotSchool, SpotStay,
 } from '@shared/schema';
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import crypto from "node:crypto";
 
 const sqlite = new Database("data.db");
@@ -47,18 +48,128 @@ ensureColumns("monthly_records", [
   { name: "primary_wind_type", ddl: "primary_wind_type TEXT" },
   { name: "secondary_wind_type", ddl: "secondary_wind_type TEXT" },
 ]);
+ensureColumns("users", [
+  { name: "role", ddl: "role TEXT NOT NULL DEFAULT 'standard'" },
+  { name: "is_active", ddl: "is_active INTEGER NOT NULL DEFAULT 1" },
+  { name: "must_change_password", ddl: "must_change_password INTEGER NOT NULL DEFAULT 0" },
+  { name: "failed_login_attempts", ddl: "failed_login_attempts INTEGER NOT NULL DEFAULT 0" },
+  { name: "temporary_lock_until", ddl: "temporary_lock_until TEXT" },
+  { name: "is_fully_locked", ddl: "is_fully_locked INTEGER NOT NULL DEFAULT 0" },
+  { name: "created_at", ddl: "created_at TEXT" },
+  { name: "updated_at", ddl: "updated_at TEXT" },
+]);
+
+// ── Schools / Stays: migrate from embedded spot_id to assignment tables ──
+// If spot_id is NOT NULL in the existing schools table we need to rebuild it so
+// that globally-created schools (not yet assigned) can be inserted without a spotId.
+function migrateSchoolsTable() {
+  const tableInfo = sqlite.prepare(`PRAGMA table_info(schools)`).all() as any[];
+  if (!tableInfo.length) return; // table doesn't exist yet — will be created fresh below
+  const spotIdCol = tableInfo.find((c: any) => c.name === 'spot_id');
+  if (!spotIdCol) return;
+  if (!spotIdCol.notnull) {
+    // Already nullable — just ensure new columns exist
+    ensureColumns("schools", [
+      { name: "sports", ddl: "sports TEXT DEFAULT '[]'" },
+      { name: "short_description", ddl: "short_description TEXT DEFAULT ''" },
+    ]);
+    return;
+  }
+  // Rebuild: make spot_id nullable and add new columns
+  sqlite.exec(`
+    BEGIN;
+    CREATE TABLE schools_v2 (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      spot_id INTEGER,
+      name TEXT NOT NULL,
+      sports TEXT DEFAULT '[]',
+      website_url TEXT DEFAULT '',
+      map_url TEXT DEFAULT '',
+      offers_rental INTEGER DEFAULT 0,
+      offers_lessons INTEGER DEFAULT 0,
+      short_description TEXT DEFAULT '',
+      notes TEXT DEFAULT '',
+      favorite INTEGER DEFAULT 0,
+      published INTEGER DEFAULT 0,
+      has_draft INTEGER DEFAULT 1,
+      published_snapshot TEXT,
+      created_at TEXT,
+      updated_at TEXT
+    );
+    INSERT INTO schools_v2 (id, spot_id, name, website_url, map_url, offers_rental, offers_lessons, notes, favorite, published, has_draft, published_snapshot, created_at, updated_at)
+      SELECT id, spot_id, name, website_url, map_url, offers_rental, offers_lessons, notes, favorite, published, has_draft, published_snapshot, created_at, updated_at FROM schools;
+    DROP TABLE schools;
+    ALTER TABLE schools_v2 RENAME TO schools;
+    COMMIT;
+  `);
+}
+
+function migrateStaysTable() {
+  const tableInfo = sqlite.prepare(`PRAGMA table_info(stays)`).all() as any[];
+  if (!tableInfo.length) return;
+  const spotIdCol = tableInfo.find((c: any) => c.name === 'spot_id');
+  if (!spotIdCol) return;
+  if (!spotIdCol.notnull) {
+    ensureColumns("stays", [
+      { name: "short_description", ddl: "short_description TEXT DEFAULT ''" },
+    ]);
+    return;
+  }
+  sqlite.exec(`
+    BEGIN;
+    CREATE TABLE stays_v2 (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      spot_id INTEGER,
+      name TEXT NOT NULL,
+      type TEXT DEFAULT '',
+      website_url TEXT DEFAULT '',
+      map_url TEXT DEFAULT '',
+      short_description TEXT DEFAULT '',
+      notes TEXT DEFAULT '',
+      favorite INTEGER DEFAULT 0,
+      published INTEGER DEFAULT 0,
+      has_draft INTEGER DEFAULT 1,
+      published_snapshot TEXT,
+      created_at TEXT,
+      updated_at TEXT
+    );
+    INSERT INTO stays_v2 (id, spot_id, name, type, website_url, map_url, notes, favorite, published, has_draft, published_snapshot, created_at, updated_at)
+      SELECT id, spot_id, name, type, website_url, map_url, notes, favorite, published, has_draft, published_snapshot, created_at, updated_at FROM stays;
+    DROP TABLE stays;
+    ALTER TABLE stays_v2 RENAME TO stays;
+    COMMIT;
+  `);
+}
+
+migrateSchoolsTable();
+migrateStaysTable();
 
 const now = () => new Date().toISOString();
 
 sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'standard',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    must_change_password INTEGER NOT NULL DEFAULT 0,
+    failed_login_attempts INTEGER NOT NULL DEFAULT 0,
+    temporary_lock_until TEXT,
+    is_fully_locked INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT,
+    updated_at TEXT
+  );
   CREATE TABLE IF NOT EXISTS schools (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    spot_id INTEGER NOT NULL,
+    spot_id INTEGER,
     name TEXT NOT NULL,
+    sports TEXT DEFAULT '[]',
     website_url TEXT DEFAULT '',
     map_url TEXT DEFAULT '',
     offers_rental INTEGER DEFAULT 0,
     offers_lessons INTEGER DEFAULT 0,
+    short_description TEXT DEFAULT '',
     notes TEXT DEFAULT '',
     favorite INTEGER DEFAULT 0,
     published INTEGER DEFAULT 0,
@@ -69,11 +180,12 @@ sqlite.exec(`
   );
   CREATE TABLE IF NOT EXISTS stays (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    spot_id INTEGER NOT NULL,
+    spot_id INTEGER,
     name TEXT NOT NULL,
     type TEXT DEFAULT '',
     website_url TEXT DEFAULT '',
     map_url TEXT DEFAULT '',
+    short_description TEXT DEFAULT '',
     notes TEXT DEFAULT '',
     favorite INTEGER DEFAULT 0,
     published INTEGER DEFAULT 0,
@@ -81,6 +193,20 @@ sqlite.exec(`
     published_snapshot TEXT,
     created_at TEXT,
     updated_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS spot_schools (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    spot_id INTEGER NOT NULL,
+    school_id INTEGER NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(spot_id, school_id)
+  );
+  CREATE TABLE IF NOT EXISTS spot_stays (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    spot_id INTEGER NOT NULL,
+    stay_id INTEGER NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(spot_id, stay_id)
   );
   CREATE TABLE IF NOT EXISTS site_pages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -90,12 +216,48 @@ sqlite.exec(`
     created_at TEXT,
     updated_at TEXT
   );
+  CREATE TABLE IF NOT EXISTS legal_pages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    privacy_policy_draft TEXT NOT NULL DEFAULT '',
+    legal_notice_draft TEXT NOT NULL DEFAULT '',
+    privacy_policy_published TEXT NOT NULL DEFAULT '',
+    legal_notice_published TEXT NOT NULL DEFAULT '',
+    has_draft INTEGER DEFAULT 1,
+    published_at TEXT,
+    created_at TEXT,
+    updated_at TEXT
+  );
 `);
+
+// Migrate existing schools/stays with spot_id into the assignment tables
+function migrateAssignmentTables() {
+  const schoolAssignCount = (sqlite.prepare(`SELECT COUNT(*) as c FROM spot_schools`).get() as any).c;
+  if (schoolAssignCount === 0) {
+    const existingSchools = sqlite.prepare(`SELECT id, spot_id FROM schools WHERE spot_id IS NOT NULL AND spot_id > 0`).all() as any[];
+    const stmt = sqlite.prepare(`INSERT OR IGNORE INTO spot_schools (spot_id, school_id, sort_order) VALUES (?, ?, ?)`);
+    existingSchools.forEach((s, idx) => stmt.run(s.spot_id, s.id, idx));
+  }
+  const stayAssignCount = (sqlite.prepare(`SELECT COUNT(*) as c FROM spot_stays`).get() as any).c;
+  if (stayAssignCount === 0) {
+    const existingStays = sqlite.prepare(`SELECT id, spot_id FROM stays WHERE spot_id IS NOT NULL AND spot_id > 0`).all() as any[];
+    const stmt = sqlite.prepare(`INSERT OR IGNORE INTO spot_stays (spot_id, stay_id, sort_order) VALUES (?, ?, ?)`);
+    existingStays.forEach((s, idx) => stmt.run(s.spot_id, s.id, idx));
+  }
+}
+migrateAssignmentTables();
 
 ensureColumns("site_pages", [
   { name: "slug", ddl: "slug TEXT NOT NULL UNIQUE" },
   { name: "title", ddl: "title TEXT NOT NULL" },
   { name: "body", ddl: "body TEXT NOT NULL" },
+]);
+ensureColumns("legal_pages", [
+  { name: "privacy_policy_draft", ddl: "privacy_policy_draft TEXT NOT NULL DEFAULT ''" },
+  { name: "legal_notice_draft", ddl: "legal_notice_draft TEXT NOT NULL DEFAULT ''" },
+  { name: "privacy_policy_published", ddl: "privacy_policy_published TEXT NOT NULL DEFAULT ''" },
+  { name: "legal_notice_published", ddl: "legal_notice_published TEXT NOT NULL DEFAULT ''" },
+  { name: "has_draft", ddl: "has_draft INTEGER DEFAULT 1" },
+  { name: "published_at", ddl: "published_at TEXT" },
 ]);
 
 const defaultImpressumBody = [
@@ -121,6 +283,16 @@ const defaultImpressumBody = [
   "Diese Website enthält Links zu externen Websites Dritter, auf deren Inhalte wir keinen Einfluss haben. Deshalb können wir für diese fremden Inhalte auch keine Gewähr übernehmen.",
 ].join("\n");
 
+const defaultPrivacyPolicyBody = [
+  "Privacy Policy",
+  "",
+  "This privacy policy explains what data Kite Compass processes and for which purposes.",
+  "",
+  "Please replace this placeholder text with your final legal content before publishing.",
+].join("\n");
+
+const defaultLegalNoticeBody = defaultImpressumBody;
+
 function ensureDefaultSitePages() {
   const row = db.select().from(sitePages).where(eq(sitePages.slug, "impressum")).get();
   if (!row) {
@@ -135,6 +307,24 @@ function ensureDefaultSitePages() {
 }
 ensureDefaultSitePages();
 
+function ensureDefaultLegalPages() {
+  const row = db.select().from(legalPages).get();
+  if (row) return;
+  const legacyImpressum = db.select().from(sitePages).where(eq(sitePages.slug, "impressum")).get();
+  const seededLegalNotice = legacyImpressum?.body?.trim() ? legacyImpressum.body : defaultLegalNoticeBody;
+  db.insert(legalPages).values({
+    privacyPolicyDraft: defaultPrivacyPolicyBody,
+    legalNoticeDraft: seededLegalNotice,
+    privacyPolicyPublished: defaultPrivacyPolicyBody,
+    legalNoticePublished: seededLegalNotice,
+    hasDraft: false,
+    publishedAt: now(),
+    createdAt: now(),
+    updatedAt: now(),
+  } as any).run();
+}
+ensureDefaultLegalPages();
+
 function ensureSpotPublicIds() {
   const rows = db.select({ id: spots.id, publicId: spots.publicId }).from(spots).all();
   for (const row of rows) {
@@ -144,6 +334,31 @@ function ensureSpotPublicIds() {
   }
 }
 ensureSpotPublicIds();
+
+function ensureSingleActiveMainAdmin() {
+  const allUsers = db.select().from(users).all();
+  if (!allUsers.length) return;
+
+  const ordered = allUsers.slice().sort((a, b) => {
+    const aTs = new Date(a.createdAt || "").getTime();
+    const bTs = new Date(b.createdAt || "").getTime();
+    if (Number.isFinite(aTs) && Number.isFinite(bTs) && aTs !== bTs) return aTs - bTs;
+    return a.id - b.id;
+  });
+
+  const activeMains = ordered.filter(u => u.role === "main" && !!u.isActive);
+  if (activeMains.length === 0) {
+    const fallback = ordered.find(u => !!u.isActive) ?? ordered[0];
+    db.update(users).set({ role: "main", isActive: true, updatedAt: now() } as any).where(eq(users.id, fallback.id)).run();
+  } else if (activeMains.length > 1) {
+    const keeper = activeMains[0];
+    for (const u of activeMains.slice(1)) {
+      db.update(users).set({ role: "standard", updatedAt: now() } as any).where(eq(users.id, u.id)).run();
+    }
+    db.update(users).set({ role: "main", isActive: true, updatedAt: now() } as any).where(eq(users.id, keeper.id)).run();
+  }
+}
+ensureSingleActiveMainAdmin();
 
 db.update(spots).set({ rankingMode: "auto" } as any).run();
 
@@ -156,13 +371,90 @@ function snapshotMonthly(m: MonthlyRecord) {
   const { publishedSnapshot, hasDraft, published, ...rest } = m as any;
   return JSON.stringify(rest);
 }
+function tryParseArr(v: any): string[] {
+  try { const a = JSON.parse(v ?? "[]"); return Array.isArray(a) ? a : []; } catch { return []; }
+}
+
+function toLegalContent(row: LegalPage): LegalContent {
+  return {
+    privacyPolicyDraft: row.privacyPolicyDraft,
+    legalNoticeDraft: row.legalNoticeDraft,
+    privacyPolicyPublished: row.privacyPolicyPublished,
+    legalNoticePublished: row.legalNoticePublished,
+    hasDraft: !!row.hasDraft,
+    publishedAt: row.publishedAt ?? null,
+    updatedAt: row.updatedAt ?? null,
+  };
+}
+
+export interface ListingsFilter {
+  search?: string;
+  published?: boolean;
+  spotId?: number;
+  missingWebsite?: boolean;
+  missingMap?: boolean;
+  // schools only
+  sports?: string[];
+  offersLessons?: boolean;
+  offersRental?: boolean;
+  // stays only
+  type?: string;
+  // pagination
+  sortBy?: "name" | "updatedAt";
+  sortDir?: "asc" | "desc";
+  page?: number;
+  perPage?: number;
+}
+
+export interface ListingsPage<T> {
+  items: T[];
+  total: number;
+  page: number;
+  perPage: number;
+}
+
+export interface LegalContent {
+  privacyPolicyDraft: string;
+  legalNoticeDraft: string;
+  privacyPolicyPublished: string;
+  legalNoticePublished: string;
+  hasDraft: boolean;
+  publishedAt: string | null;
+  updatedAt: string | null;
+}
+
+export type AdminRole = "main" | "standard";
+export interface CreateAdminUserInput {
+  email: string;
+  passwordHash: string;
+  role: AdminRole;
+  mustChangePassword: boolean;
+}
+export interface AdminUserSummary {
+  id: number;
+  email: string;
+  role: AdminRole;
+  isActive: boolean;
+  mustChangePassword: boolean;
+  failedLoginAttempts: number;
+  temporaryLockUntil: string | null;
+  isFullyLocked: boolean;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
 
 export interface IStorage {
   // auth
   getUser(id: number): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
   countUsers(): Promise<number>;
-  createUser(u: InsertUser): Promise<User>;
+  createUser(u: CreateAdminUserInput): Promise<User>;
+  updateUser(id: number, patch: Partial<InsertUser>): Promise<User | undefined>;
+  listAdminUsers(): Promise<AdminUserSummary[]>;
+  countActiveMainAdmins(): Promise<number>;
+  getActiveMainAdmin(): Promise<User | undefined>;
+  transferMainOwnership(currentMainUserId: number, nextMainUserId: number): Promise<void>;
+  deleteUser(id: number): Promise<void>;
   // spots
   listSpots(publishedOnly: boolean): Promise<Spot[]>;
   getSpot(id: number): Promise<Spot | undefined>;
@@ -181,30 +473,100 @@ export interface IStorage {
   publishAllMonthlyForSpot(spotId: number): Promise<number>;
   resetWeatherManualChanges(spotId: number): Promise<void>;
   deleteMonthly(id: number): Promise<void>;
-  // linked entities
-  listSchools(spotId: number, publishedOnly: boolean): Promise<School[]>;
+  // schools — global entity CRUD
+  getSchool(id: number): Promise<School | undefined>;
+  listAllSchools(filter: ListingsFilter): Promise<ListingsPage<School & { assignedSpotsCount: number }>>;
   createSchool(s: InsertSchool): Promise<School>;
   updateSchool(id: number, s: Partial<InsertSchool>): Promise<School | undefined>;
   publishSchool(id: number): Promise<School | undefined>;
   deleteSchool(id: number): Promise<void>;
-  listStays(spotId: number, publishedOnly: boolean): Promise<Stay[]>;
+  // schools — spot assignments
+  listSchoolsForSpot(spotId: number, publishedOnly: boolean): Promise<School[]>;
+  assignSchool(spotId: number, schoolId: number): Promise<SpotSchool>;
+  unassignSchool(spotId: number, schoolId: number): Promise<void>;
+  reorderSchoolAssignments(spotId: number, orderedSchoolIds: number[]): Promise<void>;
+  // stays — global entity CRUD
+  getStay(id: number): Promise<Stay | undefined>;
+  listAllStays(filter: ListingsFilter): Promise<ListingsPage<Stay & { assignedSpotsCount: number }>>;
   createStay(s: InsertStay): Promise<Stay>;
   updateStay(id: number, s: Partial<InsertStay>): Promise<Stay | undefined>;
   publishStay(id: number): Promise<Stay | undefined>;
   deleteStay(id: number): Promise<void>;
+  // stays — spot assignments
+  listStaysForSpot(spotId: number, publishedOnly: boolean): Promise<Stay[]>;
+  assignStay(spotId: number, stayId: number): Promise<SpotStay>;
+  unassignStay(spotId: number, stayId: number): Promise<void>;
+  reorderStayAssignments(spotId: number, orderedStayIds: number[]): Promise<void>;
   // filters
   listFilterDefs(publicOnly: boolean): Promise<FilterDef[]>;
   upsertFilterDef(f: InsertFilterDef): Promise<FilterDef>;
   // content pages
   getSitePageBySlug(slug: string): Promise<SitePage | undefined>;
   upsertSitePage(page: InsertSitePage): Promise<SitePage>;
+  // legal pages (shared draft/publish)
+  getLegalContent(): Promise<LegalContent>;
+  saveLegalDraft(privacyPolicyDraft: string, legalNoticeDraft: string): Promise<LegalContent>;
+  publishLegalDraft(): Promise<LegalContent>;
 }
 
 export class DatabaseStorage implements IStorage {
   async getUser(id: number) { return db.select().from(users).where(eq(users.id, id)).get(); }
-  async getUserByEmail(email: string) { return db.select().from(users).where(eq(users.email, email)).get(); }
+  async getUserByEmail(email: string) { return db.select().from(users).where(eq(users.email, email.toLowerCase())).get(); }
   async countUsers() { return db.select().from(users).all().length; }
-  async createUser(u: InsertUser) { return db.insert(users).values(u).returning().get(); }
+  async createUser(u: CreateAdminUserInput) {
+    return db.insert(users).values({
+      email: u.email.toLowerCase(),
+      passwordHash: u.passwordHash,
+      role: u.role,
+      isActive: true,
+      mustChangePassword: u.mustChangePassword,
+      failedLoginAttempts: 0,
+      temporaryLockUntil: null,
+      isFullyLocked: false,
+      createdAt: now(),
+      updatedAt: now(),
+    } as any).returning().get();
+  }
+  async updateUser(id: number, patch: Partial<InsertUser>) {
+    return db.update(users).set({ ...patch, updatedAt: now() } as any).where(eq(users.id, id)).returning().get();
+  }
+  async listAdminUsers(): Promise<AdminUserSummary[]> {
+    const rows = db.select().from(users).all();
+    return rows
+      .sort((a, b) => a.email.localeCompare(b.email))
+      .map(row => ({
+        id: row.id,
+        email: row.email,
+        role: (row.role === "main" ? "main" : "standard") as AdminRole,
+        isActive: !!row.isActive,
+        mustChangePassword: !!row.mustChangePassword,
+        failedLoginAttempts: row.failedLoginAttempts ?? 0,
+        temporaryLockUntil: row.temporaryLockUntil ?? null,
+        isFullyLocked: !!row.isFullyLocked,
+        createdAt: row.createdAt ?? null,
+        updatedAt: row.updatedAt ?? null,
+      }));
+  }
+  async countActiveMainAdmins(): Promise<number> {
+    return db.select().from(users).where(and(eq(users.role, "main"), eq(users.isActive, true))).all().length;
+  }
+  async getActiveMainAdmin() {
+    return db.select().from(users).where(and(eq(users.role, "main"), eq(users.isActive, true))).get();
+  }
+  async transferMainOwnership(currentMainUserId: number, nextMainUserId: number): Promise<void> {
+    sqlite.exec("BEGIN");
+    try {
+      db.update(users).set({ role: "standard", updatedAt: now() } as any).where(eq(users.id, currentMainUserId)).run();
+      db.update(users).set({ role: "main", isActive: true, updatedAt: now() } as any).where(eq(users.id, nextMainUserId)).run();
+      sqlite.exec("COMMIT");
+    } catch (error) {
+      sqlite.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  async deleteUser(id: number) {
+    db.delete(users).where(eq(users.id, id)).run();
+  }
 
   async listSpots(publishedOnly: boolean) {
     const all = db.select().from(spots).all();
@@ -227,6 +589,8 @@ export class DatabaseStorage implements IStorage {
   }
   async deleteSpot(id: number) {
     db.delete(monthlyRecords).where(eq(monthlyRecords.spotId, id)).run();
+    db.delete(spotSchools).where(eq(spotSchools.spotId, id)).run();
+    db.delete(spotStays).where(eq(spotStays.spotId, id)).run();
     db.delete(spots).where(eq(spots.id, id)).run();
   }
 
@@ -283,10 +647,52 @@ export class DatabaseStorage implements IStorage {
   }
   async deleteMonthly(id: number) { db.delete(monthlyRecords).where(eq(monthlyRecords.id, id)).run(); }
 
-  async listSchools(spotId: number, publishedOnly: boolean) {
-    const all = db.select().from(schools).where(eq(schools.spotId, spotId)).all();
-    return publishedOnly ? all.filter(s => s.published) : all;
+  // ── Schools: global entity CRUD ──
+
+  async getSchool(id: number) { return db.select().from(schools).where(eq(schools.id, id)).get(); }
+
+  async listAllSchools(filter: ListingsFilter): Promise<ListingsPage<School & { assignedSpotsCount: number }>> {
+    let all = db.select().from(schools).all();
+    const assignments = db.select().from(spotSchools).all();
+    const assignCountById: Record<number, number> = {};
+    for (const a of assignments) assignCountById[a.schoolId] = (assignCountById[a.schoolId] || 0) + 1;
+
+    if (filter.search) {
+      const q = filter.search.toLowerCase();
+      all = all.filter(s => s.name.toLowerCase().includes(q));
+    }
+    if (filter.published !== undefined) all = all.filter(s => !!s.published === filter.published);
+    if (filter.spotId !== undefined) {
+      const ids = new Set(assignments.filter(a => a.spotId === filter.spotId).map(a => a.schoolId));
+      all = all.filter(s => ids.has(s.id));
+    }
+    if (filter.missingWebsite) all = all.filter(s => !s.websiteUrl);
+    if (filter.missingMap) all = all.filter(s => !s.mapUrl);
+    if (filter.offersLessons !== undefined) all = all.filter(s => !!s.offersLessons === filter.offersLessons);
+    if (filter.offersRental !== undefined) all = all.filter(s => !!s.offersRental === filter.offersRental);
+    if (filter.sports?.length) {
+      all = all.filter(s => {
+        const sp = tryParseArr(s.sports);
+        return filter.sports!.some(x => sp.includes(x));
+      });
+    }
+
+    const sortBy = filter.sortBy || "updatedAt";
+    const sortDir = filter.sortDir || "desc";
+    all.sort((a, b) => {
+      const av = sortBy === "name" ? a.name : (a.updatedAt || "");
+      const bv = sortBy === "name" ? b.name : (b.updatedAt || "");
+      return sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
+    });
+
+    const total = all.length;
+    const perPage = filter.perPage || 50;
+    const page = filter.page || 1;
+    const start = (page - 1) * perPage;
+    const items = all.slice(start, start + perPage).map(s => ({ ...s, assignedSpotsCount: assignCountById[s.id] || 0 }));
+    return { items, total, page, perPage };
   }
+
   async createSchool(s: InsertSchool) {
     return db.insert(schools).values({ ...s, published: false, hasDraft: true, createdAt: now(), updatedAt: now() } as any).returning().get();
   }
@@ -298,12 +704,83 @@ export class DatabaseStorage implements IStorage {
     if (!s) return undefined;
     return db.update(schools).set({ published: true, hasDraft: false, publishedSnapshot: JSON.stringify(s), updatedAt: now() } as any).where(eq(schools.id, id)).returning().get();
   }
-  async deleteSchool(id: number) { db.delete(schools).where(eq(schools.id, id)).run(); }
-
-  async listStays(spotId: number, publishedOnly: boolean) {
-    const all = db.select().from(stays).where(eq(stays.spotId, spotId)).all();
-    return publishedOnly ? all.filter(s => s.published) : all;
+  async deleteSchool(id: number) {
+    db.delete(spotSchools).where(eq(spotSchools.schoolId, id)).run();
+    db.delete(schools).where(eq(schools.id, id)).run();
   }
+
+  // ── Schools: spot assignments ──
+
+  async listSchoolsForSpot(spotId: number, publishedOnly: boolean): Promise<School[]> {
+    const assignments = db.select().from(spotSchools).where(eq(spotSchools.spotId, spotId))
+      .all().sort((a, b) => a.sortOrder - b.sortOrder);
+    if (!assignments.length) return [];
+    const ids = assignments.map(a => a.schoolId);
+    const rows = db.select().from(schools).where(inArray(schools.id, ids)).all();
+    const byId = new Map(rows.map(r => [r.id, r]));
+    const ordered = assignments.map(a => byId.get(a.schoolId)).filter(Boolean) as School[];
+    return publishedOnly ? ordered.filter(s => s.published) : ordered;
+  }
+
+  async assignSchool(spotId: number, schoolId: number): Promise<SpotSchool> {
+    // Determine next sort_order for this spot
+    const existing = db.select().from(spotSchools).where(eq(spotSchools.spotId, spotId)).all();
+    const maxOrder = existing.length ? Math.max(...existing.map(a => a.sortOrder)) : -1;
+    return db.insert(spotSchools).values({ spotId, schoolId, sortOrder: maxOrder + 1 }).returning().get();
+  }
+
+  async unassignSchool(spotId: number, schoolId: number): Promise<void> {
+    db.delete(spotSchools).where(and(eq(spotSchools.spotId, spotId), eq(spotSchools.schoolId, schoolId))).run();
+  }
+
+  async reorderSchoolAssignments(spotId: number, orderedSchoolIds: number[]): Promise<void> {
+    for (let i = 0; i < orderedSchoolIds.length; i++) {
+      db.update(spotSchools)
+        .set({ sortOrder: i })
+        .where(and(eq(spotSchools.spotId, spotId), eq(spotSchools.schoolId, orderedSchoolIds[i])))
+        .run();
+    }
+  }
+
+  // ── Stays: global entity CRUD ──
+
+  async getStay(id: number) { return db.select().from(stays).where(eq(stays.id, id)).get(); }
+
+  async listAllStays(filter: ListingsFilter): Promise<ListingsPage<Stay & { assignedSpotsCount: number }>> {
+    let all = db.select().from(stays).all();
+    const assignments = db.select().from(spotStays).all();
+    const assignCountById: Record<number, number> = {};
+    for (const a of assignments) assignCountById[a.stayId] = (assignCountById[a.stayId] || 0) + 1;
+
+    if (filter.search) {
+      const q = filter.search.toLowerCase();
+      all = all.filter(s => s.name.toLowerCase().includes(q));
+    }
+    if (filter.published !== undefined) all = all.filter(s => !!s.published === filter.published);
+    if (filter.spotId !== undefined) {
+      const ids = new Set(assignments.filter(a => a.spotId === filter.spotId).map(a => a.stayId));
+      all = all.filter(s => ids.has(s.id));
+    }
+    if (filter.missingWebsite) all = all.filter(s => !s.websiteUrl);
+    if (filter.missingMap) all = all.filter(s => !s.mapUrl);
+    if (filter.type) all = all.filter(s => s.type === filter.type);
+
+    const sortBy = filter.sortBy || "updatedAt";
+    const sortDir = filter.sortDir || "desc";
+    all.sort((a, b) => {
+      const av = sortBy === "name" ? a.name : (a.updatedAt || "");
+      const bv = sortBy === "name" ? b.name : (b.updatedAt || "");
+      return sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
+    });
+
+    const total = all.length;
+    const perPage = filter.perPage || 50;
+    const page = filter.page || 1;
+    const start = (page - 1) * perPage;
+    const items = all.slice(start, start + perPage).map(s => ({ ...s, assignedSpotsCount: assignCountById[s.id] || 0 }));
+    return { items, total, page, perPage };
+  }
+
   async createStay(s: InsertStay) {
     return db.insert(stays).values({ ...s, published: false, hasDraft: true, createdAt: now(), updatedAt: now() } as any).returning().get();
   }
@@ -315,7 +792,42 @@ export class DatabaseStorage implements IStorage {
     if (!s) return undefined;
     return db.update(stays).set({ published: true, hasDraft: false, publishedSnapshot: JSON.stringify(s), updatedAt: now() } as any).where(eq(stays.id, id)).returning().get();
   }
-  async deleteStay(id: number) { db.delete(stays).where(eq(stays.id, id)).run(); }
+  async deleteStay(id: number) {
+    db.delete(spotStays).where(eq(spotStays.stayId, id)).run();
+    db.delete(stays).where(eq(stays.id, id)).run();
+  }
+
+  // ── Stays: spot assignments ──
+
+  async listStaysForSpot(spotId: number, publishedOnly: boolean): Promise<Stay[]> {
+    const assignments = db.select().from(spotStays).where(eq(spotStays.spotId, spotId))
+      .all().sort((a, b) => a.sortOrder - b.sortOrder);
+    if (!assignments.length) return [];
+    const ids = assignments.map(a => a.stayId);
+    const rows = db.select().from(stays).where(inArray(stays.id, ids)).all();
+    const byId = new Map(rows.map(r => [r.id, r]));
+    const ordered = assignments.map(a => byId.get(a.stayId)).filter(Boolean) as Stay[];
+    return publishedOnly ? ordered.filter(s => s.published) : ordered;
+  }
+
+  async assignStay(spotId: number, stayId: number): Promise<SpotStay> {
+    const existing = db.select().from(spotStays).where(eq(spotStays.spotId, spotId)).all();
+    const maxOrder = existing.length ? Math.max(...existing.map(a => a.sortOrder)) : -1;
+    return db.insert(spotStays).values({ spotId, stayId, sortOrder: maxOrder + 1 }).returning().get();
+  }
+
+  async unassignStay(spotId: number, stayId: number): Promise<void> {
+    db.delete(spotStays).where(and(eq(spotStays.spotId, spotId), eq(spotStays.stayId, stayId))).run();
+  }
+
+  async reorderStayAssignments(spotId: number, orderedStayIds: number[]): Promise<void> {
+    for (let i = 0; i < orderedStayIds.length; i++) {
+      db.update(spotStays)
+        .set({ sortOrder: i })
+        .where(and(eq(spotStays.spotId, spotId), eq(spotStays.stayId, orderedStayIds[i])))
+        .run();
+    }
+  }
 
   async listFilterDefs(publicOnly: boolean) {
     const all = db.select().from(filterDefs).all();
@@ -338,6 +850,41 @@ export class DatabaseStorage implements IStorage {
       return db.update(sitePages).set({ ...page, updatedAt: now() } as any).where(eq(sitePages.id, existing.id)).returning().get();
     }
     return db.insert(sitePages).values({ ...page, createdAt: now(), updatedAt: now() } as any).returning().get();
+  }
+
+  async getLegalContent() {
+    const row = db.select().from(legalPages).get();
+    if (!row) throw new Error("legal pages not initialized");
+    return toLegalContent(row);
+  }
+
+  async saveLegalDraft(privacyPolicyDraft: string, legalNoticeDraft: string) {
+    const row = db.select().from(legalPages).get();
+    if (!row) throw new Error("legal pages not initialized");
+    const updated = db.update(legalPages).set({
+      privacyPolicyDraft,
+      legalNoticeDraft,
+      hasDraft: true,
+      updatedAt: now(),
+    } as any).where(eq(legalPages.id, row.id)).returning().get();
+    return toLegalContent(updated);
+  }
+
+  async publishLegalDraft() {
+    const row = db.select().from(legalPages).get();
+    if (!row) throw new Error("legal pages not initialized");
+    const nextPublishedAt = now();
+    const updated = sqlite.transaction(() => {
+      const out = db.update(legalPages).set({
+        privacyPolicyPublished: row.privacyPolicyDraft,
+        legalNoticePublished: row.legalNoticeDraft,
+        hasDraft: false,
+        publishedAt: nextPublishedAt,
+        updatedAt: nextPublishedAt,
+      } as any).where(eq(legalPages.id, row.id)).returning().get();
+      return out;
+    })();
+    return toLegalContent(updated);
   }
 }
 

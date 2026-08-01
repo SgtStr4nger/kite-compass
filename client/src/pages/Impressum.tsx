@@ -1,7 +1,9 @@
+import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { SiteLayout } from "@/components/SiteChrome";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SitePage } from "@/lib/types";
+import { applyPageMetadata } from "@/lib/metadata";
 
 function Paragraphs({ body }: { body: string }) {
   return (
@@ -20,14 +22,23 @@ function Paragraphs({ body }: { body: string }) {
 }
 
 export default function Impressum() {
-  const { data: page, isLoading } = useQuery<SitePage>({ queryKey: ["/api/pages/impressum"] });
+  useEffect(() => {
+    applyPageMetadata(
+      "Legal Notice | Kite Compass",
+      "Legal information and contact details for Kite Compass.",
+      "index,follow",
+    );
+  }, []);
+
+  const previewQuery = typeof window !== "undefined" && window.location.search.includes("preview=1") ? "?preview=1" : "";
+  const { data: page, isLoading } = useQuery<SitePage>({ queryKey: [`/api/pages/legal-notice${previewQuery}`] });
 
   return (
     <SiteLayout>
       <div className="mx-auto max-w-3xl px-5 py-12 md:px-8">
         <div className="rounded-3xl border border-card-border bg-card p-6 md:p-8">
-          <h1 className="font-serif text-4xl font-semibold text-foreground">{page?.title || "Impressum"}</h1>
-          <p className="mt-3 text-sm text-muted-foreground">Editable in the admin interface.</p>
+          <h1 className="font-serif text-4xl font-semibold text-foreground">Legal Notice</h1>
+          <p className="mt-3 text-sm text-muted-foreground">Published legal contact and provider details.</p>
           <div className="mt-8">
             {isLoading ? (
               <Skeleton className="h-48 w-full rounded-2xl" />

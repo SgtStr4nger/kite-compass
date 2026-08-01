@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 
 export default function AdminLogin() {
   const [, navigate] = useLocation();
-  const { login, setup } = useAuth();
+  const { login, setup, mustChangePassword, token } = useAuth();
   const { data: status, isLoading } = useQuery<{ needsSetup: boolean }>({ queryKey: ["/api/auth/status"] });
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -24,16 +24,21 @@ export default function AdminLogin() {
     e.preventDefault();
     setError(null);
     if (needsSetup && password !== confirm) { setError("Passwords do not match."); return; }
-    if (needsSetup && password.length < 6) { setError("Password must be at least 6 characters."); return; }
+    if (needsSetup && password.length < 12) { setError("Password must be at least 12 characters."); return; }
     setBusy(true);
     try {
       if (needsSetup) await setup(email, password);
       else await login(email, password);
-      navigate("/admin/spots");
+      navigate(mustChangePassword ? "/admin/change-password" : "/admin/spots");
     } catch (err: any) {
       setError(needsSetup ? "Could not create the admin account." : "Invalid email or password.");
     } finally { setBusy(false); }
   };
+
+  useEffect(() => {
+    if (!token) return;
+    navigate(mustChangePassword ? "/admin/change-password" : "/admin/spots");
+  }, [token, mustChangePassword, navigate]);
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-primary px-5">
@@ -62,6 +67,7 @@ export default function AdminLogin() {
               <div>
                 <Label htmlFor="password">Password</Label>
                 <Input id="password" type="password" required value={password} onChange={e => setPassword(e.target.value)} data-testid="input-password" className="mt-1.5" autoComplete={needsSetup ? "new-password" : "current-password"} />
+                {needsSetup ? <p className="mt-1 text-xs text-muted-foreground">Minimum 12 chars, uppercase, lowercase, number, special.</p> : null}
               </div>
               {needsSetup && (
                 <div>
