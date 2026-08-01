@@ -50,6 +50,8 @@ export default function Results() {
 
   const activeCount =
     filters.spotType.length + filters.riderLevel.length + filters.vibe.length +
+    filters.windType.length + filters.waterState.length +
+    (filters.windMin != null || filters.windMax != null ? 1 : 0) +
     (filters.country ? 1 : 0);
 
   const filterControls = <FilterPanel defs={defs} countries={countries} state={filters} onChange={setFilters} />;

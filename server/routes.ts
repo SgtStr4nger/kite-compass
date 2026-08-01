@@ -4,7 +4,8 @@ import type { Server } from 'node:http';
 import crypto from 'node:crypto';
 import { and, eq } from "drizzle-orm";
 import { db, storage } from "./storage";
-import { enrichSpotById, MissingCoordinatesError, calculateWeatherScore } from "./services/enrichment";
+import { enrichSpotById, MissingCoordinatesError } from "./services/enrichment";
+import { calculateAutoMonthlyScore, deriveSeasonLabelFromScore, resolveMonthlyScore } from "@shared/scoring";
 import { insertSpotSchema, insertMonthlySchema, monthlyRecords, schools, spots, stays } from "@shared/schema";
 import type { Spot, MonthlyRecord, InsertMonthly, InsertSchool, InsertStay } from "@shared/schema";
 
@@ -14,7 +15,6 @@ const MONTH_ORDER = [
   "July", "August", "September", "October", "November", "December",
 ] as const;
 
-type SeasonLabel = "peak" | "side" | "off";
 type DataStatus = "fresh" | "dirty" | "missing";
 
 const REFRESH_SPOT_DELAY_MS = 900;
@@ -34,20 +34,15 @@ function spotDataStatus(spot: { dataLastRefreshedAt?: string | null; updatedAt?:
   return "fresh";
 }
 
-function weatherScoreForMonthlyRecord(row: any): number | null {
-  const stored = row.automaticWindScore;
-  return stored != null && Number.isFinite(stored) ? stored : calculateWeatherScore(row);
+function monthlyScoreForSpot(row: any, rankingMode?: string | null): number | null {
+  return resolveMonthlyScore(row, rankingMode);
 }
 
-function seasonLabelFromScore(score: number | null): SeasonLabel {
-  if (score == null) return "side";
-  if (score >= 7.5) return "peak";
-  if (score >= 5) return "side";
-  return "off";
-}
-
-function applyPublicSeasonLabels(monthly: any[]): any[] {
-  return monthly.map(m => ({ ...m, seasonLabel: seasonLabelFromScore(weatherScoreForMonthlyRecord(m)) }));
+function applyPublicSeasonLabels(monthly: any[], rankingMode?: string | null): any[] {
+  return monthly.map(m => ({
+    ...m,
+    seasonLabel: deriveSeasonLabelFromScore(monthlyScoreForSpot(m, rankingMode)),
+  }));
 }
 
 function sleep(ms: number): Promise<void> {
@@ -130,6 +125,7 @@ function serializeSpot(s: Spot, preview = true) {
     spotTypes: parseArr(v.spotTypes),
     riderLevels: parseArr(v.riderLevels),
     vibeTags: parseArr(v.vibeTags),
+    waterStates: parseArr((v as any).waterStates),
     beginnerFriendly: !!v.beginnerFriendly,
     publicId: v.publicId || "",
     dataStatus,
@@ -142,7 +138,7 @@ function serializeSpot(s: Spot, preview = true) {
 }
 function serializeMonthly(m: MonthlyRecord, preview = true) {
   const v = publishedView(m, preview) as MonthlyRecord;
-  return { ...v, seasonLabel: seasonLabelFromScore(weatherScoreForMonthlyRecord(v)), published: !!m.published, hasDraft: !!m.hasDraft, publishedSnapshot: undefined };
+  return { ...v, published: !!m.published, hasDraft: !!m.hasDraft, publishedSnapshot: undefined };
 }
 function serializeLinked<T extends { publishedSnapshot?: any; published?: any; hasDraft?: any }>(row: T, preview = true): T {
   return publishedView(row, preview);
@@ -150,7 +146,7 @@ function serializeLinked<T extends { publishedSnapshot?: any; published?: any; h
 // stringify array fields before writing
 function normalizeSpotInput(body: any) {
   const out = { ...body };
-  for (const k of ["spotTypes", "riderLevels", "vibeTags"]) {
+  for (const k of ["spotTypes", "riderLevels", "vibeTags", "waterStates"]) {
     if (Array.isArray(out[k])) out[k] = JSON.stringify(out[k]);
   }
   return out;
@@ -216,33 +212,47 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const riderLevels = ([] as string[]).concat(req.query.riderLevel as any || []);
     const vibes = ([] as string[]).concat(req.query.vibe as any || []);
     const country = (req.query.country as string) || null;
+    const windTypes = ([] as string[]).concat(req.query.windType as any || []);
+    const waterStates = ([] as string[]).concat(req.query.waterState as any || []);
+    const windMinRaw = req.query.windMin != null ? Number(req.query.windMin) : null;
+    const windMaxRaw = req.query.windMax != null ? Number(req.query.windMax) : null;
+    const windMin = windMinRaw != null && Number.isFinite(windMinRaw) ? windMinRaw : null;
+    const windMax = windMaxRaw != null && Number.isFinite(windMaxRaw) ? windMaxRaw : null;
+    const windRangeActive = windMin != null || windMax != null;
 
     let rows: any[] = spots.map(s => {
+      const rankingMode = s.rankingMode;
       const spotMonthly = monthly.filter(m => m.spotId === s.id);
-      const publicMonthly = admin ? spotMonthly : applyPublicSeasonLabels(spotMonthly);
+      const publicMonthly = admin ? spotMonthly : applyPublicSeasonLabels(spotMonthly, rankingMode);
       const selectedMonthly = months.length ? spotMonthly.filter(m => monthSet.has(m.month)) : [];
       const monthsAvail = spotMonthly.map(m => m.month);
       const scoreSource = months.length ? selectedMonthly : spotMonthly;
       const scores = scoreSource
-        .map(weatherScoreForMonthlyRecord)
+        .map(record => monthlyScoreForSpot(record, rankingMode))
         .filter((v): v is number => typeof v === "number" && Number.isFinite(v));
       const score = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
       const rec = (months.length ? selectedMonthly : spotMonthly)
         .slice()
-        .sort((a, b) => (weatherScoreForMonthlyRecord(b) ?? -1) - (weatherScoreForMonthlyRecord(a) ?? -1))[0] || null;
+        .sort((a, b) => (monthlyScoreForSpot(b, rankingMode) ?? -1) - (monthlyScoreForSpot(a, rankingMode) ?? -1))[0] || null;
       // Compact season strip: 12 entries in fixed Jan→Dec order, each the season
       // label for that month or null when no published record exists. Lets result
       // cards render a season strip without a second request.
       const bySeason = new Map(publicMonthly.map(m => [m.month, m.seasonLabel]));
       const seasonByMonth = MONTH_ORDER.map(mn => bySeason.get(mn) ?? null);
       const publicRec = rec ? publicMonthly.find(m => m.month === rec.month) : null;
-      const monthRecord = rec ? { ...rec, seasonLabel: publicRec?.seasonLabel ?? seasonLabelFromScore(weatherScoreForMonthlyRecord(rec)) } : null;
+      const monthRecord = rec ? { ...rec, seasonLabel: publicRec?.seasonLabel ?? deriveSeasonLabelFromScore(monthlyScoreForSpot(rec, rankingMode)) } : null;
       const searchHaystack = [s.name, s.country, s.region, s.slug, s.destinationSummary, s.teaserText]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
       if (query && !searchHaystack.includes(query)) return null;
-      return { ...s, monthRecord, score, monthsAvailable: monthsAvail, seasonByMonth };
+      // Compute per-spot average wind across the relevant month window (for wind-range filter).
+      const windWindow = months.length ? selectedMonthly : spotMonthly;
+      const windValues = windWindow
+        .map(m => (m as any).avgKiteableWind10mKnots ?? (m as any).averageBaseWind)
+        .filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+      const avgWind = windValues.length ? windValues.reduce((a, b) => a + b, 0) / windValues.length : null;
+      return { ...s, monthRecord, score, monthsAvailable: monthsAvail, seasonByMonth, _avgWind: avgWind, _spotMonthly: spotMonthly };
     });
 
     rows = rows.filter(Boolean);
@@ -251,6 +261,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (riderLevels.length) rows = rows.filter(r => riderLevels.some(t => r.riderLevels.includes(t)));
     if (vibes.length) rows = rows.filter(r => vibes.some(t => r.vibeTags.includes(t)));
     if (country) rows = rows.filter(r => r.country === country);
+
+    if (windTypes.length) {
+      rows = rows.filter(r => {
+        const window: any[] = months.length
+          ? r._spotMonthly.filter((m: any) => monthSet.has(m.month))
+          : r._spotMonthly;
+        return windTypes.some(wt =>
+          window.some((m: any) => m.primaryWindType === wt || m.secondaryWindType === wt),
+        );
+      });
+    }
+    if (waterStates.length) {
+      rows = rows.filter(r => waterStates.some(ws => (r.waterStates ?? []).includes(ws)));
+    }
+    if (windRangeActive) {
+      rows = rows.filter(r => {
+        const avg = r._avgWind;
+        if (avg == null) return false; // no evaluable wind → fails active range filter
+        if (windMin != null && avg < windMin) return false;
+        if (windMax != null && avg > windMax) return false;
+        return true;
+      });
+    }
+
+    // Strip internal-only fields before sending response.
+    rows = rows.map(({ _avgWind: _, _spotMonthly: __, ...rest }) => rest);
 
     rows.sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
     res.json(rows);
@@ -261,11 +297,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const admin = isAuthed(req) && req.query.preview === "1";
     const spot = await storage.getSpotBySlug(req.params.slug);
     if (!spot || (!spot.published && !admin)) return res.status(404).json({ error: "not found" });
+    const serializedSpot = serializeSpot(spot, admin);
     const monthly = (await storage.listMonthly(spot.id, !admin)).map(m => serializeMonthly(m, admin));
-    const publicMonthly = admin ? monthly : applyPublicSeasonLabels(monthly);
+    const publicMonthly = admin ? monthly : applyPublicSeasonLabels(monthly, serializedSpot.rankingMode);
     const schools = (await storage.listSchools(spot.id, !admin)).map(s => serializeLinked(s, admin));
     const stays = (await storage.listStays(spot.id, !admin)).map(s => serializeLinked(s, admin));
-    res.json({ ...serializeSpot(spot, admin), monthly: publicMonthly, schools, stays });
+    res.json({ ...serializedSpot, monthly: publicMonthly, schools, stays });
   });
 
   // list of distinct countries (for filter)
@@ -416,12 +453,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
   app.post("/api/admin/scores/recalculate", requireAuth, async (_req, res) => {
     const rows = await storage.listAllMonthly(false);
+    const spotRows = await storage.listSpots(false);
+    const rankingModeBySpotId = new Map(spotRows.map(spot => [spot.id, spot.rankingMode]));
     let updated = 0;
     for (const row of rows) {
-      const score = calculateWeatherScore(row);
+      const rankingMode = rankingModeBySpotId.get(row.spotId);
+      if (rankingMode !== "auto") continue;
+      const score = calculateAutoMonthlyScore(row);
       await storage.updateMonthly(row.id, {
         automaticWindScore: score,
-        seasonLabel: seasonLabelFromScore(score),
+        seasonLabel: deriveSeasonLabelFromScore(score),
       } as any);
       updated++;
     }

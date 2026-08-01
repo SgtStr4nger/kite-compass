@@ -48,6 +48,7 @@ export const spots = sqliteTable("spots", {
   spotTypes: text("spot_types").default("[]"),      // JSON array
   riderLevels: text("rider_levels").default("[]"),  // JSON array
   vibeTags: text("vibe_tags").default("[]"),        // JSON array
+  waterStates: text("water_states").default("[]"),  // JSON array: Flat|Choppy|Wave|Mixed
   internalNotes: text("internal_notes").default(""),
   sourceNotes: text("source_notes").default(""),
   // ranking mode: 'manual' | 'auto' (admin-only control)
@@ -88,6 +89,9 @@ export const monthlyRecords = sqliteTable("monthly_records", {
   maxWaveHeightM: real("max_wave_height_m"),
   avgWavePeriodS: real("avg_wave_period_s"),
   dominantWaveDirectionDeg: real("dominant_wave_direction_deg"),
+  // Wind direction classification (per spec §16): Onshore|Side-on|Side-shore|Side-off|Offshore
+  primaryWindType: text("primary_wind_type"),
+  secondaryWindType: text("secondary_wind_type"),
   windSourceName: text("wind_source_name").default(""),
   windSourceUrl: text("wind_source_url").default(""),
   internalNotes: text("internal_notes").default(""),
