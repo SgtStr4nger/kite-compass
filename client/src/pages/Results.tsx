@@ -48,6 +48,11 @@ export default function Results() {
     if (mobileView === "map") setMobileView("list");
   };
 
+  // Mobile map tap -> navigate directly to spot page (spec §6.2)
+  const onMobileMarkerNavigate = (slug: string) => {
+    navigate(`/spots/${slug}`);
+  };
+
   const activeCount =
     filters.spotType.length + filters.riderLevel.length + filters.vibe.length +
     filters.windType.length + filters.waterState.length +
@@ -148,6 +153,8 @@ export default function Results() {
                     points={points}
                     selectedId={selectedId}
                     onSelect={onMarkerSelect}
+                    onNavigate={onMobileMarkerNavigate}
+                    isMobile={mobileView === "map"}
                     className="h-full w-full"
                   />
                 </div>
