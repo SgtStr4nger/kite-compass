@@ -47,7 +47,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     setAuthCallbacks({
       onTokenRefresh: (nextToken) => {
-        setToken(nextToken);
+        setAuthToken(nextToken);
         setLastActivityAt(Date.now());
       },
       onSessionExpired: () => {
