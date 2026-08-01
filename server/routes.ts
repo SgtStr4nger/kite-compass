@@ -206,6 +206,32 @@ function writeWorkbookBase64(sheetName: string, headers: readonly string[], rows
   const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
   return buf.toString("base64");
 }
+function buildPreviewResponse(session: ExcelPreviewSession) {
+  const category = session.category;
+  const expected = XLSX_COLUMNS[category];
+  const summary = {
+    newCount: session.rows.filter(r => r.kind === "new").length,
+    updateCount: session.rows.filter(r => r.kind === "update").length,
+    errorIdNotFoundCount: session.rows.filter(r => r.kind === "error_id_not_found").length,
+    errorInvalidDataCount: session.rows.filter(r => r.kind === "error_invalid_data").length,
+  };
+  const updatesXlsxBase64 = writeWorkbookBase64(
+    XLSX_SHEETS[category],
+    expected,
+    session.rows.filter(r => r.kind === "new" || r.kind === "update").map(r => r.values),
+  );
+  const errorsXlsxBase64 = writeWorkbookBase64(
+    XLSX_SHEETS[category],
+    [...expected, "error"],
+    session.rows.filter(r => r.kind.startsWith("error")).map(r => ({ ...r.values, error: r.error ?? "" })),
+  );
+  return {
+    previewId: session.id,
+    summary,
+    rows: session.rows.map(r => ({ rowNumber: r.rowNumber, kind: r.kind, internalId: r.internalId, error: r.error })),
+    files: { updatesFileName: "updates.xlsx", updatesFileBase64: updatesXlsxBase64, errorsFileName: "errors.xlsx", errorsFileBase64: errorsXlsxBase64 },
+  };
+}
 const LEGAL_PAGE_META = {
   "privacy-policy": {
     title: "Privacy Policy",
@@ -846,16 +872,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             : parseStayRow(values, knownStayIds, knownSpotIds);
         return { ...parsed, rowNumber: i + 2 };
       });
+      const nowIso = new Date().toISOString();
       const summary = {
         newCount: parsedRows.filter(r => r.kind === "new").length,
         updateCount: parsedRows.filter(r => r.kind === "update").length,
         errorIdNotFoundCount: parsedRows.filter(r => r.kind === "error_id_not_found").length,
         errorInvalidDataCount: parsedRows.filter(r => r.kind === "error_invalid_data").length,
       };
-      const updatesXlsxBase64 = writeWorkbookBase64(XLSX_SHEETS[category], expected, parsedRows.filter(r => r.kind === "new" || r.kind === "update").map(r => r.values));
-      const errorsXlsxBase64 = writeWorkbookBase64(XLSX_SHEETS[category], [...expected, "error"], parsedRows.filter(r => r.kind.startsWith("error")).map(r => ({ ...r.values, error: r.error ?? "" })));
-
-      const nowIso = new Date().toISOString();
+      const previewId = crypto.randomUUID();
+      const session: ExcelPreviewSession = { id: previewId, category, fileName, rows: parsedRows, createdAtIso: nowIso, runId: -1 };
+      const previewPayload = buildPreviewResponse(session);
       const run = sqlite.prepare(`
         INSERT INTO excel_import_history
           (category, file_name, status, created_count, updated_count, skipped_count, error_count, new_count, update_count,
@@ -865,23 +891,39 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         category, fileName,
         summary.errorIdNotFoundCount + summary.errorInvalidDataCount,
         summary.newCount, summary.updateCount, summary.errorIdNotFoundCount, summary.errorInvalidDataCount,
-        nowIso, nowIso, nowIso, fileBase64, updatesXlsxBase64, errorsXlsxBase64,
+        nowIso, nowIso, nowIso, fileBase64, previewPayload.files.updatesFileBase64, previewPayload.files.errorsFileBase64,
       );
 
-      const previewId = crypto.randomUUID();
-      excelPreviewSessions.set(previewId, { id: previewId, category, fileName, rows: parsedRows, createdAtIso: nowIso, runId: Number(run.lastInsertRowid) });
+      session.runId = Number(run.lastInsertRowid);
+      excelPreviewSessions.set(previewId, session);
       setExcelState("Ready for confirmation", { category, run_id: Number(run.lastInsertRowid), message: fileName });
-      return res.json({
-        previewId,
-        summary,
-        rows: parsedRows.map(r => ({ rowNumber: r.rowNumber, kind: r.kind, internalId: r.internalId, error: r.error })),
-        files: { updatesFileName: "updates.xlsx", updatesFileBase64: updatesXlsxBase64, errorsFileName: "errors.xlsx", errorsFileBase64: errorsXlsxBase64 },
-      });
+      return res.json(previewPayload);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Excel import validation failed";
       setExcelState("Failed", { category, message, dismissible: true, dismissed: false });
       return res.status(400).json({ error: message });
     }
+  });
+
+  app.get("/api/admin/excel/import/:category/preview-current", requireAuth, async (req, res) => {
+    const category = String(req.params.category);
+    if (!isExcelCategory(category)) return res.status(400).json({ error: "invalid category" });
+    const state = getExcelState();
+    if (state.status !== "Ready for confirmation" || state.category !== category || !state.run_id) {
+      return res.status(404).json({ error: "no preview ready for confirmation" });
+    }
+    const session = Array.from(excelPreviewSessions.values()).find(s => s.category === category && s.runId === state.run_id);
+    if (!session) {
+      const nowIso = new Date().toISOString();
+      sqlite.prepare(`
+        UPDATE excel_import_history
+        SET status = 'Failed', updated_at = ?, end_at = ?, technical_error = ?, rollback_notice = ?
+        WHERE id = ?
+      `).run(nowIso, nowIso, "Preview session expired before confirmation", "No changes were applied.", state.run_id);
+      setExcelState("Failed", { category, run_id: state.run_id, message: "Preview session expired. Please re-upload the file.", dismissible: true, dismissed: false });
+      return res.status(410).json({ error: "preview session expired. Please upload the file again." });
+    }
+    return res.json(buildPreviewResponse(session));
   });
 
   app.post("/api/admin/excel/import/:category/cancel", requireAuth, async (req, res) => {
