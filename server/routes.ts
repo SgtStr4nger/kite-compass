@@ -3,11 +3,12 @@ import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import crypto from 'node:crypto';
 import { and, eq } from "drizzle-orm";
-import { db, storage } from "./storage";
+import * as XLSX from "xlsx";
+import { db, storage, sqlite } from "./storage";
 import type { ListingsFilter, SeoContent } from "./storage";
 import { enrichSpotById, MissingCoordinatesError } from "./services/enrichment";
 import { calculateAutoMonthlyScore, deriveSeasonLabelFromScore, resolveMonthlyScore } from "@shared/scoring";
-import { insertSpotSchema, insertMonthlySchema, monthlyRecords, schools, spots, stays } from "@shared/schema";
+import { insertSpotSchema, insertMonthlySchema, monthlyRecords, schools, spots, stays, spotSchools, spotStays } from "@shared/schema";
 import type { Spot, MonthlyRecord, InsertMonthly, InsertSchool, InsertStay } from "@shared/schema";
 
 // Fixed Jan→Dec order for compact season strips (server-side; mirrors client MONTHS).
@@ -24,6 +25,187 @@ type ContentStatus = "unpublished" | "published" | "published-draft";
 type WeatherStatus = "Missing" | "Up to date" | "Up to date · Manual changes" | "Outdated" | "Update failed";
 
 const REFRESH_SPOT_DELAY_MS = 900;
+const EXCEL_MAX_ROWS = 5000;
+const EXCEL_RETENTION_DAYS = 30;
+const EXCEL_ACTIVE_STATUSES = new Set(["Uploading", "Validating", "Ready for confirmation", "Importing", "Rolling back"]);
+const EXCEL_TERMINAL_STATUSES = new Set(["Completed", "Failed", "Cancelled"]);
+const SPOT_TYPES = new Set(["flat-water", "chop", "waves", "lagoon", "foil", "freestyle"]);
+const RIDER_LEVELS = new Set(["beginner", "intermediate", "advanced"]);
+const VIBE_TAGS = new Set(["city", "town", "village", "remote", "touristy", "local-scene", "family-friendly", "nightlife"]);
+const WATER_STATES = new Set(["Flat", "Choppy", "Wave", "Mixed"]);
+const SCHOOL_SPORTS = new Set(["Kitesurfing", "Wingfoiling", "Kitefoiling", "Surfing"]);
+const STAY_TYPES = new Set(["Hotel", "Hostel", "Apartment", "Guesthouse", "Resort"]);
+const XLSX_COLUMNS = {
+  spots: [
+    "internal_id", "name", "country_code", "latitude", "longitude", "weather_latitude", "weather_longitude",
+    "onshore_direction_degrees", "spot_description", "kite_conditions_description", "warning_text", "rider_levels",
+    "water_states", "destination_type", "destination_vibes",
+  ],
+  schools: [
+    "internal_id", "name", "sports", "lessons", "rental", "website_url", "google_maps_url", "short_description", "published", "spot_ids",
+  ],
+  stays: [
+    "internal_id", "name", "type", "website_url", "google_maps_url", "short_description", "published", "spot_ids",
+  ],
+} as const;
+const XLSX_SHEETS = { spots: "Spots", schools: "Kite Schools", stays: "Stays" } as const;
+type ExcelCategory = keyof typeof XLSX_COLUMNS;
+type ExcelImportAction = "create_update" | "create_only";
+type ImportRowKind = "new" | "update" | "error_id_not_found" | "error_invalid_data";
+type ParsedImportRow = {
+  rowNumber: number;
+  kind: ImportRowKind;
+  internalId: number | null;
+  error: string | null;
+  values: Record<string, string>;
+  normalized: Record<string, unknown> | null;
+};
+type ExcelPreviewSession = {
+  id: string;
+  category: ExcelCategory;
+  fileName: string;
+  rows: ParsedImportRow[];
+  createdAtIso: string;
+  runId: number;
+};
+type ExcelStatusRow = {
+  status: string;
+  category: string | null;
+  run_id: number | null;
+  message: string | null;
+  dismissible: number;
+  dismissed: number;
+  updated_at: string | null;
+};
+const excelPreviewSessions = new Map<string, ExcelPreviewSession>();
+let weatherImportActive = false;
+
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS excel_import_state (
+    id INTEGER PRIMARY KEY CHECK(id = 1),
+    status TEXT NOT NULL DEFAULT 'Idle',
+    category TEXT,
+    run_id INTEGER,
+    message TEXT DEFAULT '',
+    dismissible INTEGER NOT NULL DEFAULT 0,
+    dismissed INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS excel_import_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    category TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_count INTEGER NOT NULL DEFAULT 0,
+    updated_count INTEGER NOT NULL DEFAULT 0,
+    skipped_count INTEGER NOT NULL DEFAULT 0,
+    error_count INTEGER NOT NULL DEFAULT 0,
+    new_count INTEGER NOT NULL DEFAULT 0,
+    update_count INTEGER NOT NULL DEFAULT 0,
+    error_id_not_found_count INTEGER NOT NULL DEFAULT 0,
+    error_invalid_data_count INTEGER NOT NULL DEFAULT 0,
+    start_at TEXT,
+    end_at TEXT,
+    duration_ms INTEGER,
+    technical_error TEXT,
+    rollback_notice TEXT,
+    source_file_base64 TEXT,
+    updates_file_base64 TEXT,
+    errors_file_base64 TEXT,
+    created_at TEXT,
+    updated_at TEXT
+  );
+`);
+const existingExcelState = sqlite.prepare(`SELECT id FROM excel_import_state WHERE id = 1`).get() as { id: number } | undefined;
+if (!existingExcelState) {
+  sqlite.prepare(`
+    INSERT INTO excel_import_state (id, status, category, run_id, message, dismissible, dismissed, updated_at)
+    VALUES (1, 'Idle', NULL, NULL, '', 0, 0, ?)
+  `).run(new Date().toISOString());
+}
+
+function sanitizeFileName(input: string): string {
+  return input.replace(/[^a-zA-Z0-9._-]/g, "_") || "import.xlsx";
+}
+function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+function slugifyName(name: string): string {
+  return name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+function isExcelCategory(v: string): v is ExcelCategory {
+  return v === "spots" || v === "schools" || v === "stays";
+}
+function toCellString(value: unknown): string {
+  if (value == null) return "";
+  return String(value).trim();
+}
+function parseNullableNumber(raw: string): { ok: true; value: number | null } | { ok: false } {
+  if (!raw) return { ok: true, value: null };
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return { ok: false };
+  return { ok: true, value: n };
+}
+function parseBooleanCell(raw: string): { ok: true; value: boolean } | { ok: false } {
+  if (!raw) return { ok: true, value: false };
+  const lowered = raw.toLowerCase();
+  if (["1", "true", "yes", "y"].includes(lowered)) return { ok: true, value: true };
+  if (["0", "false", "no", "n"].includes(lowered)) return { ok: true, value: false };
+  return { ok: false };
+}
+function parseCsv(raw: string): string[] {
+  if (!raw) return [];
+  return Array.from(new Set(raw.split(",").map(v => v.trim()).filter(Boolean)));
+}
+function getExcelState(): ExcelStatusRow {
+  return (sqlite.prepare(`
+    SELECT status, category, run_id, message, dismissible, dismissed, updated_at
+    FROM excel_import_state
+    WHERE id = 1
+  `).get() as ExcelStatusRow);
+}
+function setExcelState(status: string, patch: Partial<Pick<ExcelStatusRow, "category" | "run_id" | "message">> & { dismissible?: boolean; dismissed?: boolean } = {}) {
+  sqlite.prepare(`
+    UPDATE excel_import_state
+    SET status = ?, category = ?, run_id = ?, message = ?, dismissible = ?, dismissed = ?, updated_at = ?
+    WHERE id = 1
+  `).run(
+    status,
+    patch.category ?? null,
+    patch.run_id ?? null,
+    patch.message ?? "",
+    patch.dismissible ? 1 : 0,
+    patch.dismissed ? 1 : 0,
+    new Date().toISOString(),
+  );
+}
+function isExcelImportActive(): boolean {
+  return EXCEL_ACTIVE_STATUSES.has(getExcelState().status);
+}
+function shouldBlockForExcel(req: Request): boolean {
+  if (!req.path.startsWith("/api/admin")) return false;
+  if (!isExcelImportActive()) return false;
+  const allowed = req.path.startsWith("/api/admin/excel/status")
+    || req.path.startsWith("/api/admin/excel/import/")
+    || req.path.startsWith("/api/admin/excel/dismiss");
+  if (allowed) return false;
+  return req.method !== "GET";
+}
+function pruneImportFileRetention() {
+  const cutoff = new Date(Date.now() - EXCEL_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  sqlite.prepare(`
+    UPDATE excel_import_history
+    SET source_file_base64 = NULL, updates_file_base64 = NULL, errors_file_base64 = NULL
+    WHERE created_at < ? AND (source_file_base64 IS NOT NULL OR updates_file_base64 IS NOT NULL OR errors_file_base64 IS NOT NULL)
+  `).run(cutoff);
+}
+function writeWorkbookBase64(sheetName: string, headers: readonly string[], rows: Record<string, unknown>[]): string {
+  const aoa: unknown[][] = [Array.from(headers), ...rows.map(row => headers.map(h => row[h] ?? ""))];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), sheetName);
+  const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
+  return buf.toString("base64");
+}
 const LEGAL_PAGE_META = {
   "privacy-policy": {
     title: "Privacy Policy",
@@ -151,6 +333,9 @@ async function requireAuth(req: Request, res: Response, next: NextFunction) {
   }
   const user = await storage.getUser(parsed.userId);
   if (!user || !user.isActive) return res.status(401).json({ error: "unauthorized" });
+  if (shouldBlockForExcel(req)) {
+    return res.status(423).json({ error: "Excel import in progress. Admin write actions are temporarily blocked." });
+  }
   (req as any).userId = user.id;
   (req as any).user = user;
   res.setHeader("x-auth-token", makeToken(user.id));
@@ -275,6 +460,128 @@ function serializeAdminUser(u: any) {
   };
 }
 
+function parseInternalId(raw: string): number | null | "invalid" {
+  if (!raw) return null;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) return "invalid";
+  return n;
+}
+
+function parseSpotsRow(values: Record<string, string>, knownSpotIds: Set<number>): ParsedImportRow {
+  const internal = parseInternalId(values.internal_id);
+  if (internal === "invalid") return { rowNumber: 0, kind: "error_invalid_data", internalId: null, error: "Invalid internal_id", values, normalized: null };
+  if (typeof internal === "number" && !knownSpotIds.has(internal)) return { rowNumber: 0, kind: "error_id_not_found", internalId: internal, error: "ID not found", values, normalized: null };
+  if (!values.name.trim()) return { rowNumber: 0, kind: "error_invalid_data", internalId: internal, error: "Name is required", values, normalized: null };
+
+  const latitude = parseNullableNumber(values.latitude);
+  const longitude = parseNullableNumber(values.longitude);
+  const weatherLatitude = parseNullableNumber(values.weather_latitude);
+  const weatherLongitude = parseNullableNumber(values.weather_longitude);
+  const onshore = parseNullableNumber(values.onshore_direction_degrees);
+  if (!latitude.ok || !longitude.ok || !weatherLatitude.ok || !weatherLongitude.ok || !onshore.ok) {
+    return { rowNumber: 0, kind: "error_invalid_data", internalId: internal, error: "Invalid number value", values, normalized: null };
+  }
+  const riderLevels = parseCsv(values.rider_levels).map(v => v.toLowerCase());
+  if (riderLevels.some(v => !RIDER_LEVELS.has(v))) {
+    return { rowNumber: 0, kind: "error_invalid_data", internalId: internal, error: "Invalid rider level", values, normalized: null };
+  }
+  const waterStates = parseCsv(values.water_states).map(v => v[0]?.toUpperCase() + v.slice(1).toLowerCase());
+  if (waterStates.some(v => !WATER_STATES.has(v))) {
+    return { rowNumber: 0, kind: "error_invalid_data", internalId: internal, error: "Invalid water state", values, normalized: null };
+  }
+  const destinationType = parseCsv(values.destination_type).map(v => slugifyName(v)).filter(Boolean);
+  if (destinationType.some(v => !SPOT_TYPES.has(v))) {
+    return { rowNumber: 0, kind: "error_invalid_data", internalId: internal, error: "Invalid destination type", values, normalized: null };
+  }
+  const destinationVibes = parseCsv(values.destination_vibes).map(v => slugifyName(v)).filter(Boolean);
+  if (destinationVibes.some(v => !VIBE_TAGS.has(v))) {
+    return { rowNumber: 0, kind: "error_invalid_data", internalId: internal, error: "Invalid destination vibe", values, normalized: null };
+  }
+  return {
+    rowNumber: 0,
+    kind: typeof internal === "number" ? "update" : "new",
+    internalId: internal,
+    error: null,
+    values,
+    normalized: {
+      name: values.name.trim(),
+      country: values.country_code.trim(),
+      latitude: latitude.value ?? weatherLatitude.value,
+      longitude: longitude.value ?? weatherLongitude.value,
+      destinationDescription: values.spot_description,
+      kiteContextDescription: values.kite_conditions_description,
+      dataQualityNote: values.warning_text,
+      riderLevels,
+      waterStates,
+      spotTypes: destinationType,
+      vibeTags: destinationVibes,
+    },
+  };
+}
+
+function parseSchoolRow(values: Record<string, string>, knownSchoolIds: Set<number>, knownSpotIds: Set<number>): ParsedImportRow {
+  const internal = parseInternalId(values.internal_id);
+  if (internal === "invalid") return { rowNumber: 0, kind: "error_invalid_data", internalId: null, error: "Invalid internal_id", values, normalized: null };
+  if (typeof internal === "number" && !knownSchoolIds.has(internal)) return { rowNumber: 0, kind: "error_id_not_found", internalId: internal, error: "ID not found", values, normalized: null };
+  if (!values.name.trim()) return { rowNumber: 0, kind: "error_invalid_data", internalId: internal, error: "Name is required", values, normalized: null };
+  const lessons = parseBooleanCell(values.lessons);
+  const rental = parseBooleanCell(values.rental);
+  const published = parseBooleanCell(values.published);
+  if (!lessons.ok || !rental.ok || !published.ok) return { rowNumber: 0, kind: "error_invalid_data", internalId: internal, error: "Invalid boolean value", values, normalized: null };
+  const sports = parseCsv(values.sports);
+  if (sports.some(v => !SCHOOL_SPORTS.has(v))) return { rowNumber: 0, kind: "error_invalid_data", internalId: internal, error: "Invalid sport value", values, normalized: null };
+  const spotIds = parseCsv(values.spot_ids).map(v => Number(v));
+  if (spotIds.some(v => !Number.isInteger(v) || v <= 0 || !knownSpotIds.has(v))) {
+    return { rowNumber: 0, kind: "error_invalid_data", internalId: internal, error: "Invalid spot_ids", values, normalized: null };
+  }
+  return {
+    rowNumber: 0,
+    kind: typeof internal === "number" ? "update" : "new",
+    internalId: internal,
+    error: null,
+    values,
+    normalized: {
+      name: values.name.trim(),
+      sports,
+      offersLessons: lessons.value,
+      offersRental: rental.value,
+      websiteUrl: values.website_url,
+      mapUrl: values.google_maps_url,
+      shortDescription: values.short_description,
+      published: published.value,
+      spotIds: Array.from(new Set(spotIds)),
+    },
+  };
+}
+
+function parseStayRow(values: Record<string, string>, knownStayIds: Set<number>, knownSpotIds: Set<number>): ParsedImportRow {
+  const internal = parseInternalId(values.internal_id);
+  if (internal === "invalid") return { rowNumber: 0, kind: "error_invalid_data", internalId: null, error: "Invalid internal_id", values, normalized: null };
+  if (typeof internal === "number" && !knownStayIds.has(internal)) return { rowNumber: 0, kind: "error_id_not_found", internalId: internal, error: "ID not found", values, normalized: null };
+  if (!values.name.trim()) return { rowNumber: 0, kind: "error_invalid_data", internalId: internal, error: "Name is required", values, normalized: null };
+  const published = parseBooleanCell(values.published);
+  if (!published.ok) return { rowNumber: 0, kind: "error_invalid_data", internalId: internal, error: "Invalid boolean value", values, normalized: null };
+  if (values.type && !STAY_TYPES.has(values.type)) return { rowNumber: 0, kind: "error_invalid_data", internalId: internal, error: "Invalid stay type", values, normalized: null };
+  const spotIds = parseCsv(values.spot_ids).map(v => Number(v));
+  if (spotIds.some(v => !Number.isInteger(v) || v <= 0 || !knownSpotIds.has(v))) return { rowNumber: 0, kind: "error_invalid_data", internalId: internal, error: "Invalid spot_ids", values, normalized: null };
+  return {
+    rowNumber: 0,
+    kind: typeof internal === "number" ? "update" : "new",
+    internalId: internal,
+    error: null,
+    values,
+    normalized: {
+      name: values.name.trim(),
+      type: values.type,
+      websiteUrl: values.website_url,
+      mapUrl: values.google_maps_url,
+      shortDescription: values.short_description,
+      published: published.value,
+      spotIds: Array.from(new Set(spotIds)),
+    },
+  };
+}
+
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
   app.get("/robots.txt", (_req, res) => {
     res.type("text/plain").send([
@@ -376,6 +683,349 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const nextToken = makeToken(user.id);
     res.setHeader("x-auth-token", nextToken);
     res.json({ token: nextToken, user: serializeAdminUser(user) });
+  });
+
+  app.get("/api/admin/excel/status", requireAuth, async (_req, res) => {
+    pruneImportFileRetention();
+    const row = getExcelState();
+    res.json({
+      status: row.status,
+      category: row.category,
+      runId: row.run_id,
+      message: row.message || "",
+      active: EXCEL_ACTIVE_STATUSES.has(row.status),
+      dismissible: !!row.dismissible,
+      dismissed: !!row.dismissed,
+      visible: row.status !== "Idle" && (!row.dismissed || EXCEL_ACTIVE_STATUSES.has(row.status)),
+      updatedAt: row.updated_at,
+    });
+  });
+
+  app.post("/api/admin/excel/dismiss", requireAuth, async (_req, res) => {
+    const row = getExcelState();
+    if (EXCEL_TERMINAL_STATUSES.has(row.status)) {
+      setExcelState(row.status, { category: row.category, run_id: row.run_id, message: row.message ?? "", dismissible: true, dismissed: true });
+    }
+    res.json({ ok: true });
+  });
+
+  app.get("/api/admin/excel/import/:category/history", requireAuth, async (req, res) => {
+    const category = String(req.params.category);
+    if (!isExcelCategory(category)) return res.status(400).json({ error: "invalid category" });
+    pruneImportFileRetention();
+    const rows = sqlite.prepare(`
+      SELECT id, category, file_name, status, created_count, updated_count, skipped_count, error_count,
+             new_count, update_count, error_id_not_found_count, error_invalid_data_count, start_at, end_at, duration_ms,
+             technical_error, rollback_notice, created_at, updated_at
+      FROM excel_import_history
+      WHERE category = ?
+      ORDER BY id DESC
+      LIMIT 50
+    `).all(category);
+    res.json(rows);
+  });
+
+  app.post("/api/admin/excel/export/:category", requireAuth, async (req, res) => {
+    const category = String(req.params.category);
+    if (!isExcelCategory(category)) return res.status(400).json({ error: "invalid category" });
+    const scope = String(req.body?.scope ?? "all");
+    const selectedIds = Array.isArray(req.body?.selectedIds) ? req.body.selectedIds.map((v: unknown) => Number(v)).filter((v: number) => Number.isInteger(v) && v > 0) : [];
+    const filters = (req.body?.filters ?? {}) as ListingsFilter & { q?: string };
+    const date = todayIsoDate();
+    const headers = XLSX_COLUMNS[category];
+
+    let rows: Record<string, unknown>[] = [];
+    if (category === "spots") {
+      let list = (await storage.listSpots(false)).map(s => serializeSpot(s, true));
+      if (filters.q) {
+        const q = filters.q.toLowerCase();
+        list = list.filter(s => s.name.toLowerCase().includes(q) || (s.country || "").toLowerCase().includes(q));
+      }
+      if (scope === "selected") list = list.filter(s => selectedIds.includes(s.id));
+      rows = list.map(s => ({
+        internal_id: s.id,
+        name: s.name ?? "",
+        country_code: s.country ?? "",
+        latitude: s.latitude ?? "",
+        longitude: s.longitude ?? "",
+        weather_latitude: s.latitude ?? "",
+        weather_longitude: s.longitude ?? "",
+        onshore_direction_degrees: "",
+        spot_description: s.destinationDescription ?? "",
+        kite_conditions_description: s.kiteContextDescription ?? "",
+        warning_text: s.dataQualityNote ?? "",
+        rider_levels: (s.riderLevels ?? []).join(", "),
+        water_states: (s.waterStates ?? []).join(", "),
+        destination_type: (s.spotTypes ?? []).join(", "),
+        destination_vibes: (s.vibeTags ?? []).join(", "),
+      }));
+    } else if (category === "schools") {
+      let list = (await storage.listAllSchools({ ...filters, page: 1, perPage: EXCEL_MAX_ROWS })).items;
+      if (scope === "selected") list = list.filter(s => selectedIds.includes(s.id));
+      const assignments = db.select().from(spotSchools).all();
+      const spotIdsBySchool = new Map<number, number[]>();
+      for (const row of assignments) {
+        const cur = spotIdsBySchool.get(row.schoolId) ?? [];
+        cur.push(row.spotId);
+        spotIdsBySchool.set(row.schoolId, cur);
+      }
+      rows = list.map(s => ({
+        internal_id: s.id,
+        name: s.name ?? "",
+        sports: parseArr(s.sports).join(", "),
+        lessons: !!s.offersLessons,
+        rental: !!s.offersRental,
+        website_url: s.websiteUrl ?? "",
+        google_maps_url: s.mapUrl ?? "",
+        short_description: s.shortDescription ?? "",
+        published: !!s.published,
+        spot_ids: (spotIdsBySchool.get(s.id) ?? []).join(", "),
+      }));
+    } else {
+      let list = (await storage.listAllStays({ ...filters, page: 1, perPage: EXCEL_MAX_ROWS })).items;
+      if (scope === "selected") list = list.filter(s => selectedIds.includes(s.id));
+      const assignments = db.select().from(spotStays).all();
+      const spotIdsByStay = new Map<number, number[]>();
+      for (const row of assignments) {
+        const cur = spotIdsByStay.get(row.stayId) ?? [];
+        cur.push(row.spotId);
+        spotIdsByStay.set(row.stayId, cur);
+      }
+      rows = list.map(s => ({
+        internal_id: s.id,
+        name: s.name ?? "",
+        type: s.type ?? "",
+        website_url: s.websiteUrl ?? "",
+        google_maps_url: s.mapUrl ?? "",
+        short_description: s.shortDescription ?? "",
+        published: !!s.published,
+        spot_ids: (spotIdsByStay.get(s.id) ?? []).join(", "),
+      }));
+    }
+    if (scope === "template") rows = [];
+    const fileBase64 = writeWorkbookBase64(XLSX_SHEETS[category], headers, rows);
+    const fileName = scope === "template" ? `${category}-template-${date}.xlsx` : `${category}-export-${date}.xlsx`;
+    res.json({ fileName, fileBase64 });
+  });
+
+  app.post("/api/admin/excel/import/:category/preview", requireAuth, async (req, res) => {
+    const category = String(req.params.category);
+    if (!isExcelCategory(category)) return res.status(400).json({ error: "invalid category" });
+    if (weatherImportActive) return res.status(409).json({ error: "Weather import is active" });
+    if (isExcelImportActive()) return res.status(409).json({ error: "Another Excel import is active" });
+
+    const fileName = sanitizeFileName(String(req.body?.fileName ?? "import.xlsx"));
+    if (!fileName.toLowerCase().endsWith(".xlsx")) return res.status(400).json({ error: "Only .xlsx files are supported" });
+    const fileBase64 = String(req.body?.fileBase64 ?? "");
+    if (!fileBase64) return res.status(400).json({ error: "fileBase64 required" });
+    setExcelState("Uploading", { category, message: `Uploading ${fileName}` });
+    try {
+      setExcelState("Validating", { category, message: `Validating ${fileName}` });
+      const workbook = XLSX.read(Buffer.from(fileBase64, "base64"), { type: "buffer" });
+      const sheetName = XLSX_SHEETS[category];
+      const sheet = workbook.Sheets[sheetName];
+      if (!sheet) throw new Error(`Sheet "${sheetName}" not found`);
+      const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: "" });
+      const header = (rows[0] ?? []).map(toCellString);
+      const expected = XLSX_COLUMNS[category];
+      if (header.length !== expected.length || expected.some((col, i) => header[i] !== col)) {
+        throw new Error("Invalid column schema");
+      }
+      const dataRows = rows.slice(1);
+      if (dataRows.length > EXCEL_MAX_ROWS) throw new Error(`Maximum ${EXCEL_MAX_ROWS} data rows allowed`);
+
+      const knownSpotIds = new Set((await storage.listSpots(false)).map(s => s.id));
+      const knownSchoolIds = new Set((await storage.listAllSchools({ page: 1, perPage: EXCEL_MAX_ROWS })).items.map(s => s.id));
+      const knownStayIds = new Set((await storage.listAllStays({ page: 1, perPage: EXCEL_MAX_ROWS })).items.map(s => s.id));
+      const parsedRows: ParsedImportRow[] = dataRows.map((raw, i) => {
+        const values = Object.fromEntries(expected.map((h, idx) => [h, toCellString((raw as unknown[])[idx])])) as Record<string, string>;
+        const parsed = category === "spots"
+          ? parseSpotsRow(values, knownSpotIds)
+          : category === "schools"
+            ? parseSchoolRow(values, knownSchoolIds, knownSpotIds)
+            : parseStayRow(values, knownStayIds, knownSpotIds);
+        return { ...parsed, rowNumber: i + 2 };
+      });
+      const summary = {
+        newCount: parsedRows.filter(r => r.kind === "new").length,
+        updateCount: parsedRows.filter(r => r.kind === "update").length,
+        errorIdNotFoundCount: parsedRows.filter(r => r.kind === "error_id_not_found").length,
+        errorInvalidDataCount: parsedRows.filter(r => r.kind === "error_invalid_data").length,
+      };
+      const updatesXlsxBase64 = writeWorkbookBase64(XLSX_SHEETS[category], expected, parsedRows.filter(r => r.kind === "new" || r.kind === "update").map(r => r.values));
+      const errorsXlsxBase64 = writeWorkbookBase64(XLSX_SHEETS[category], [...expected, "error"], parsedRows.filter(r => r.kind.startsWith("error")).map(r => ({ ...r.values, error: r.error ?? "" })));
+
+      const nowIso = new Date().toISOString();
+      const run = sqlite.prepare(`
+        INSERT INTO excel_import_history
+          (category, file_name, status, created_count, updated_count, skipped_count, error_count, new_count, update_count,
+           error_id_not_found_count, error_invalid_data_count, start_at, created_at, updated_at, source_file_base64, updates_file_base64, errors_file_base64)
+        VALUES (?, ?, 'Ready for confirmation', 0, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        category, fileName,
+        summary.errorIdNotFoundCount + summary.errorInvalidDataCount,
+        summary.newCount, summary.updateCount, summary.errorIdNotFoundCount, summary.errorInvalidDataCount,
+        nowIso, nowIso, nowIso, fileBase64, updatesXlsxBase64, errorsXlsxBase64,
+      );
+
+      const previewId = crypto.randomUUID();
+      excelPreviewSessions.set(previewId, { id: previewId, category, fileName, rows: parsedRows, createdAtIso: nowIso, runId: Number(run.lastInsertRowid) });
+      setExcelState("Ready for confirmation", { category, run_id: Number(run.lastInsertRowid), message: fileName });
+      return res.json({
+        previewId,
+        summary,
+        rows: parsedRows.map(r => ({ rowNumber: r.rowNumber, kind: r.kind, internalId: r.internalId, error: r.error })),
+        files: { updatesFileName: "updates.xlsx", updatesFileBase64: updatesXlsxBase64, errorsFileName: "errors.xlsx", errorsFileBase64: errorsXlsxBase64 },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Excel import validation failed";
+      setExcelState("Failed", { category, message, dismissible: true, dismissed: false });
+      return res.status(400).json({ error: message });
+    }
+  });
+
+  app.post("/api/admin/excel/import/:category/cancel", requireAuth, async (req, res) => {
+    const category = String(req.params.category);
+    if (!isExcelCategory(category)) return res.status(400).json({ error: "invalid category" });
+    const previewId = String(req.body?.previewId ?? "");
+    const session = excelPreviewSessions.get(previewId);
+    if (!session || session.category !== category) return res.status(404).json({ error: "preview session not found" });
+    excelPreviewSessions.delete(previewId);
+    sqlite.prepare(`UPDATE excel_import_history SET status = 'Cancelled', updated_at = ?, end_at = ? WHERE id = ?`)
+      .run(new Date().toISOString(), new Date().toISOString(), session.runId);
+    setExcelState("Cancelled", { category, run_id: session.runId, message: "Cancelled by admin", dismissible: true, dismissed: false });
+    res.json({ ok: true });
+  });
+
+  app.post("/api/admin/excel/import/:category/commit", requireAuth, async (req, res) => {
+    const category = String(req.params.category);
+    if (!isExcelCategory(category)) return res.status(400).json({ error: "invalid category" });
+    const previewId = String(req.body?.previewId ?? "");
+    const action = String(req.body?.action ?? "") as ExcelImportAction;
+    if (action !== "create_only" && action !== "create_update") return res.status(400).json({ error: "invalid action" });
+    const session = excelPreviewSessions.get(previewId);
+    if (!session || session.category !== category) return res.status(404).json({ error: "preview session not found" });
+
+    const validRows = session.rows.filter(r => r.kind === "new" || (r.kind === "update" && action === "create_update"));
+    const skippedCount = session.rows.length - validRows.length;
+    const startIso = new Date().toISOString();
+    setExcelState("Importing", { category, run_id: session.runId, message: `Importing ${validRows.length} rows` });
+    let createdCount = 0;
+    let updatedCount = 0;
+    try {
+      const tx = sqlite.transaction(() => {
+        for (const row of validRows) {
+          if (!row.normalized) continue;
+          if (category === "spots") {
+            const payload = normalizeSpotInput(row.normalized);
+            if (row.kind === "new") {
+              const base = slugifyName(String(payload.name || "spot")) || "spot";
+              let slug = base;
+              let idx = 1;
+              while (db.select().from(spots).where(eq(spots.slug, slug)).get()) slug = `${base}-${idx++}`;
+              db.insert(spots).values({
+                ...payload,
+                slug,
+                publicId: crypto.randomUUID(),
+                published: false,
+                hasDraft: true,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              } as any).run();
+              createdCount++;
+            } else if (row.internalId) {
+              db.update(spots).set({ ...payload, hasDraft: true, updatedAt: new Date().toISOString() } as any).where(eq(spots.id, row.internalId)).run();
+              updatedCount++;
+            }
+          } else if (category === "schools") {
+            const payload = row.normalized as { spotIds: number[]; [key: string]: unknown };
+            const { spotIds, ...rest } = payload;
+            let schoolId = row.internalId;
+            if (row.kind === "new") {
+              const created = db.insert(schools).values({
+                ...rest,
+                sports: JSON.stringify((rest.sports as string[]) ?? []),
+                published: false,
+                hasDraft: true,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              } as any).returning().get();
+              schoolId = created.id;
+              createdCount++;
+            } else if (schoolId) {
+              db.update(schools).set({
+                ...rest,
+                sports: JSON.stringify((rest.sports as string[]) ?? []),
+                hasDraft: true,
+                updatedAt: new Date().toISOString(),
+              } as any).where(eq(schools.id, schoolId)).run();
+              updatedCount++;
+            }
+            if (schoolId) {
+              db.delete(spotSchools).where(eq(spotSchools.schoolId, schoolId)).run();
+              spotIds.forEach((spotId, idx) => {
+                db.insert(spotSchools).values({ spotId, schoolId, sortOrder: idx }).run();
+              });
+            }
+          } else {
+            const payload = row.normalized as { spotIds: number[]; [key: string]: unknown };
+            const { spotIds, ...rest } = payload;
+            let stayId = row.internalId;
+            if (row.kind === "new") {
+              const created = db.insert(stays).values({
+                ...rest,
+                published: false,
+                hasDraft: true,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              } as any).returning().get();
+              stayId = created.id;
+              createdCount++;
+            } else if (stayId) {
+              db.update(stays).set({
+                ...rest,
+                hasDraft: true,
+                updatedAt: new Date().toISOString(),
+              } as any).where(eq(stays.id, stayId)).run();
+              updatedCount++;
+            }
+            if (stayId) {
+              db.delete(spotStays).where(eq(spotStays.stayId, stayId)).run();
+              spotIds.forEach((spotId, idx) => {
+                db.insert(spotStays).values({ spotId, stayId, sortOrder: idx }).run();
+              });
+            }
+          }
+        }
+      });
+      tx();
+      const endIso = new Date().toISOString();
+      const durationMs = new Date(endIso).getTime() - new Date(startIso).getTime();
+      sqlite.prepare(`
+        UPDATE excel_import_history
+        SET status = 'Completed', created_count = ?, updated_count = ?, skipped_count = ?, error_count = ?,
+            start_at = COALESCE(start_at, ?), end_at = ?, duration_ms = ?, updated_at = ?, technical_error = NULL, rollback_notice = NULL
+        WHERE id = ?
+      `).run(
+        createdCount, updatedCount, skippedCount, session.rows.filter(r => r.kind.startsWith("error")).length,
+        startIso, endIso, durationMs, endIso, session.runId,
+      );
+      excelPreviewSessions.delete(previewId);
+      setExcelState("Completed", { category, run_id: session.runId, message: `Created ${createdCount}, updated ${updatedCount}`, dismissible: true, dismissed: false });
+      res.json({ createdCount, updatedCount, skippedCount });
+    } catch (error) {
+      const endIso = new Date().toISOString();
+      const message = error instanceof Error ? error.message : "Technical import failure";
+      setExcelState("Rolling back", { category, run_id: session.runId, message: "Rolling back changes…" });
+      sqlite.prepare(`
+        UPDATE excel_import_history
+        SET status = 'Failed', start_at = COALESCE(start_at, ?), end_at = ?, duration_ms = ?, updated_at = ?,
+            technical_error = ?, rollback_notice = 'All selected rows were rolled back.'
+        WHERE id = ?
+      `).run(startIso, endIso, new Date(endIso).getTime() - new Date(startIso).getTime(), endIso, message, session.runId);
+      setExcelState("Failed", { category, run_id: session.runId, message, dismissible: true, dismissed: false });
+      res.status(500).json({ error: message });
+    }
   });
 
   app.get("/api/admin/users", requireAuth, requireMainAdmin, async (_req, res) => {
@@ -694,6 +1344,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // Weather enrichment (Open-Meteo). Writes DRAFTS; admin reviews + publishes.
   // Failure-safe: on API error nothing is overwritten and existing data stays.
   app.post("/api/admin/spots/:id/enrich", requireAuth, async (req, res) => {
+    if (isExcelImportActive()) return res.status(409).json({ error: "Excel import is active" });
+    if (weatherImportActive) return res.status(409).json({ error: "Weather import is already running" });
+    weatherImportActive = true;
     try {
       const out = await enrichSpotById(Number(req.params.id));
       res.json(out);
@@ -702,34 +1355,43 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (/No spot with id/.test(e?.message ?? "")) return res.status(404).json({ error: e.message });
       // Upstream/API failure — surfaced to the admin; data left intact.
       res.status(502).json({ error: `Weather provider error: ${e?.message ?? "unknown"}` });
+    } finally {
+      weatherImportActive = false;
     }
   });
 
   app.post("/api/admin/data/refresh", requireAuth, async (req, res) => {
-    const scope = req.body?.scope === "all" ? "all" : "missing";
-    const spots = await storage.listSpots(false);
-    const eligible = spots.filter(spot => {
-      if (!spot.latitude || !spot.longitude) return false;
-      return scope === "all" ? true : !spot.dataLastRefreshedAt;
-    });
+    if (isExcelImportActive()) return res.status(409).json({ error: "Excel import is active" });
+    if (weatherImportActive) return res.status(409).json({ error: "Weather import is already running" });
+    weatherImportActive = true;
+    try {
+      const scope = req.body?.scope === "all" ? "all" : "missing";
+      const spots = await storage.listSpots(false);
+      const eligible = spots.filter(spot => {
+        if (!spot.latitude || !spot.longitude) return false;
+        return scope === "all" ? true : !spot.dataLastRefreshedAt;
+      });
 
-    let updated = 0;
-    let skipped = spots.length - eligible.length;
-    const failures: { id: number; slug: string; error: string }[] = [];
+      let updated = 0;
+      let skipped = spots.length - eligible.length;
+      const failures: { id: number; slug: string; error: string }[] = [];
 
-    for (const spot of eligible) {
-      try {
-        await enrichSpotById(spot.id);
-        updated++;
-      } catch (e: any) {
-        failures.push({ id: spot.id, slug: spot.slug, error: String(e?.message ?? e) });
-      } finally {
-        if (spot !== eligible[eligible.length - 1]) await sleep(REFRESH_SPOT_DELAY_MS);
+      for (const spot of eligible) {
+        try {
+          await enrichSpotById(spot.id);
+          updated++;
+        } catch (e: any) {
+          failures.push({ id: spot.id, slug: spot.slug, error: String(e?.message ?? e) });
+        } finally {
+          if (spot !== eligible[eligible.length - 1]) await sleep(REFRESH_SPOT_DELAY_MS);
+        }
       }
-    }
 
-    if (failures.length) skipped += failures.length;
-    res.json({ scope, updated, skipped, failed: failures.length, failures });
+      if (failures.length) skipped += failures.length;
+      res.json({ scope, updated, skipped, failed: failures.length, failures });
+    } finally {
+      weatherImportActive = false;
+    }
   });
 
   app.post("/api/admin/data/publish", requireAuth, async (_req, res) => {

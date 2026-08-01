@@ -214,6 +214,66 @@ export interface ListingsPage<T> {
   perPage: number;
 }
 
+export type ExcelCategory = "spots" | "schools" | "stays";
+export type ExcelImportRowKind = "new" | "update" | "error_id_not_found" | "error_invalid_data";
+export type ExcelImportAction = "create_update" | "create_only";
+
+export interface ExcelImportStatus {
+  status: string;
+  category: ExcelCategory | null;
+  runId: number | null;
+  message: string;
+  active: boolean;
+  dismissible: boolean;
+  dismissed: boolean;
+  visible: boolean;
+  updatedAt: string | null;
+}
+
+export interface ExcelImportPreviewResponse {
+  previewId: string;
+  summary: {
+    newCount: number;
+    updateCount: number;
+    errorIdNotFoundCount: number;
+    errorInvalidDataCount: number;
+  };
+  rows: Array<{
+    rowNumber: number;
+    kind: ExcelImportRowKind;
+    internalId: number | null;
+    error: string | null;
+  }>;
+  files: {
+    updatesFileName: string;
+    updatesFileBase64: string;
+    errorsFileName: string;
+    errorsFileBase64: string;
+  };
+}
+
+export interface ExcelImportHistoryItem {
+  id: number;
+  category: ExcelCategory;
+  file_name: string;
+  status: string;
+  created_count: number;
+  updated_count: number;
+  skipped_count: number;
+  error_count: number;
+  new_count: number;
+  update_count: number;
+  error_id_not_found_count: number;
+  error_invalid_data_count: number;
+  start_at: string | null;
+  end_at: string | null;
+  duration_ms: number | null;
+  technical_error: string | null;
+  rollback_notice: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
 export const MONTHS = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",

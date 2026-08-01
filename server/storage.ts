@@ -11,7 +11,7 @@ import Database from "better-sqlite3";
 import { eq, and, inArray } from "drizzle-orm";
 import crypto from "node:crypto";
 
-const sqlite = new Database("data.db");
+export const sqlite = new Database("data.db");
 sqlite.pragma("journal_mode = WAL");
 export const db = drizzle(sqlite);
 
