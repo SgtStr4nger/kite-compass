@@ -7,6 +7,7 @@ import * as XLSX from "xlsx";
 import { db, storage, sqlite, logError } from "./storage";
 import type { ListingsFilter, SeoContent, TrashCategory, RedirectRow, AdminErrorStatus } from "./storage";
 import { enrichSpotById, MissingCoordinatesError } from "./services/enrichment";
+import { getContinentForCountry } from "@shared/locations";
 import { calculateAutoMonthlyScore, deriveSeasonLabelFromScore, resolveMonthlyScore } from "@shared/scoring";
 import { insertSpotSchema, insertMonthlySchema, monthlyRecords, schools, spots, stays, spotSchools, spotStays } from "@shared/schema";
 import type { Spot, MonthlyRecord, InsertMonthly, InsertSchool, InsertStay } from "@shared/schema";
@@ -1232,10 +1233,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     const months = toArray(req.query.month);
     const monthSet = new Set(months);
+    const continents = toArray(req.query.continent);
+    const continentSet = new Set(continents);
     const spotTypes = ([] as string[]).concat(req.query.spotType as any || []);
     const riderLevels = ([] as string[]).concat(req.query.riderLevel as any || []);
     const vibes = ([] as string[]).concat(req.query.vibe as any || []);
-    const country = (req.query.country as string) || null;
+    const countries = toArray(req.query.country);
+    const countrySet = new Set(countries);
     const windTypes = ([] as string[]).concat(req.query.windType as any || []);
     const waterStates = ([] as string[]).concat(req.query.waterState as any || []);
     const windMinRaw = req.query.windMin != null ? Number(req.query.windMin) : null;
@@ -1284,7 +1288,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (spotTypes.length) rows = rows.filter(r => spotTypes.some(t => r.spotTypes.includes(t)));
     if (riderLevels.length) rows = rows.filter(r => riderLevels.some(t => r.riderLevels.includes(t)));
     if (vibes.length) rows = rows.filter(r => vibes.some(t => r.vibeTags.includes(t)));
-    if (country) rows = rows.filter(r => r.country === country);
+    if (continents.length || countries.length) {
+      rows = rows.filter(r => {
+        if (countrySet.has(r.country)) return true;
+        const continent = getContinentForCountry(r.country);
+        return continent != null && continentSet.has(continent);
+      });
+    }
 
     if (windTypes.length) {
       rows = rows.filter(r => {
