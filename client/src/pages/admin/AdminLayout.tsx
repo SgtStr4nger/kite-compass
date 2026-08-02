@@ -3,7 +3,7 @@ import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { CompassMark } from "@/components/Logo";
 import { Button } from "@/components/ui/button";
-import { LogOut, LayoutGrid, Database, FileText, ExternalLink, School, Hotel, Users, Search, Trash2, ArrowRightLeft } from "lucide-react";
+import { LogOut, LayoutGrid, Database, FileText, ExternalLink, School, Hotel, Users, Search, Trash2, ArrowRightLeft, AlertCircle } from "lucide-react";
 import { applyRobotsMetadata } from "@/lib/metadata";
 import { api } from "@/lib/api";
 import { ExcelImportStatus } from "@/lib/types";
@@ -13,6 +13,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
   const [, navigate] = useLocation();
   const [location] = useLocation();
   const [excelStatus, setExcelStatus] = useState<ExcelImportStatus | null>(null);
+  const [openErrorCount, setOpenErrorCount] = useState(0);
 
   useEffect(() => {
     if (mustChangePassword && location !== "/admin/change-password") navigate("/admin/change-password");
@@ -47,6 +48,32 @@ export function AdminLayout({ children }: { children: ReactNode }) {
     };
 
     void poll();
+    return () => { alive = false; if (timerId !== null) window.clearTimeout(timerId); };
+  }, [token]);
+
+  // Poll open error count for nav badge
+  useEffect(() => {
+    if (!token) return;
+    let alive = true;
+    let timerId: number | null = null;
+
+    const scheduleNext = (ms: number) => {
+      if (!alive) return;
+      timerId = window.setTimeout(() => { void pollErrors(); }, ms);
+    };
+
+    const pollErrors = async () => {
+      try {
+        const res = await api<{ open: number }>("GET", "/api/admin/errors/count");
+        if (!alive) return;
+        setOpenErrorCount(res.open);
+        scheduleNext(res.open > 0 ? 5000 : 30_000);
+      } catch {
+        if (alive) scheduleNext(30_000);
+      }
+    };
+
+    void pollErrors();
     return () => { alive = false; if (timerId !== null) window.clearTimeout(timerId); };
   }, [token]);
 
@@ -99,6 +126,17 @@ export function AdminLayout({ children }: { children: ReactNode }) {
             {navLink("/admin/redirects", <ArrowRightLeft className="h-4 w-4" />, "Redirects", "link-admin-redirects")}
             {navLink("/admin/users", <Users className="h-4 w-4" />, "Users", "link-admin-users")}
             {navLink("/admin/trash", <Trash2 className="h-4 w-4" />, "Trash", "link-admin-trash")}
+            <Link href="/admin/errors"
+              className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium no-underline transition-colors ${location === "/admin/errors" ? "bg-sidebar-accent text-sidebar-foreground" : "text-sidebar-foreground/90 hover:bg-sidebar-accent"}`}
+              data-testid="link-admin-errors">
+              <AlertCircle className="h-4 w-4" />
+              Errors
+              {openErrorCount > 0 && (
+                <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-xs font-bold text-white">
+                  {openErrorCount > 99 ? "99+" : openErrorCount}
+                </span>
+              )}
+            </Link>
           </div>
 
           <div className="pt-2">

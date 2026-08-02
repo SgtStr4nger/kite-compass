@@ -24,6 +24,7 @@ import AdminUsers from "@/pages/admin/AdminUsers";
 import AdminSEO from "@/pages/admin/AdminSEO";
 import AdminTrash from "@/pages/admin/AdminTrash";
 import AdminRedirects from "@/pages/admin/AdminRedirects";
+import AdminErrors from "@/pages/admin/AdminErrors";
 
 function AppRouter() {
   return (
@@ -48,6 +49,7 @@ function AppRouter() {
       <Route path="/admin/listings/stays" component={AdminListingsStays} />
       <Route path="/admin/trash" component={AdminTrash} />
       <Route path="/admin/redirects" component={AdminRedirects} />
+      <Route path="/admin/errors" component={AdminErrors} />
       <Route component={NotFound} />
     </Switch>
   );

@@ -4,8 +4,8 @@ import type { Server } from 'node:http';
 import crypto from 'node:crypto';
 import { and, eq } from "drizzle-orm";
 import * as XLSX from "xlsx";
-import { db, storage, sqlite } from "./storage";
-import type { ListingsFilter, SeoContent, TrashCategory, RedirectRow } from "./storage";
+import { db, storage, sqlite, logError } from "./storage";
+import type { ListingsFilter, SeoContent, TrashCategory, RedirectRow, AdminErrorStatus } from "./storage";
 import { enrichSpotById, MissingCoordinatesError } from "./services/enrichment";
 import { calculateAutoMonthlyScore, deriveSeasonLabelFromScore, resolveMonthlyScore } from "@shared/scoring";
 import { insertSpotSchema, insertMonthlySchema, monthlyRecords, schools, spots, stays, spotSchools, spotStays } from "@shared/schema";
@@ -1109,6 +1109,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         WHERE id = ?
       `).run(startIso, endIso, new Date(endIso).getTime() - new Date(startIso).getTime(), endIso, message, session.runId);
       setExcelState("Failed", { category, run_id: session.runId, message, dismissible: true, dismissed: false });
+      void logError("Excel Import", `${category} import failed: ${message}`, `run:${session.runId}`);
       res.status(500).json({ error: message });
     }
   });
@@ -1466,7 +1467,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           await enrichSpotById(spot.id);
           updated++;
         } catch (e: any) {
-          failures.push({ id: spot.id, slug: spot.slug, error: String(e?.message ?? e) });
+          const errMsg = String(e?.message ?? e);
+          failures.push({ id: spot.id, slug: spot.slug, error: errMsg });
+          void logError("Weather Enrichment", `Weather refresh failed for spot "${spot.name}": ${errMsg}`, `spot:${spot.id}`);
         } finally {
           if (spot !== eligible[eligible.length - 1]) await sleep(REFRESH_SPOT_DELAY_MS);
         }
@@ -2035,6 +2038,37 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.delete("/api/admin/redirects/:id", requireAuth, async (req, res) => {
     await storage.deleteRedirect(Number(req.params.id));
+    res.json({ ok: true });
+  });
+
+  // ── Admin Errors (spec §33) ──
+  app.get("/api/admin/errors/count", requireAuth, async (_req, res) => {
+    const open = await storage.countOpenAdminErrors();
+    res.json({ open });
+  });
+
+  app.get("/api/admin/errors", requireAuth, async (req, res) => {
+    const statusParam = req.query.status as string | undefined;
+    const validStatuses: AdminErrorStatus[] = ["Open", "Resolved", "Dismissed"];
+    const filter = validStatuses.includes(statusParam as AdminErrorStatus)
+      ? { status: statusParam as AdminErrorStatus }
+      : undefined;
+    const rows = await storage.listAdminErrors(filter);
+    res.json(rows.map(r => ({
+      id: r.id,
+      area: r.area,
+      recordId: r.record_id ?? null,
+      summary: r.summary,
+      errorId: r.error_id,
+      status: r.status,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    })));
+  });
+
+  app.post("/api/admin/errors/:id/dismiss", requireAuth, async (req, res) => {
+    const id = Number(req.params.id);
+    await storage.dismissAdminError(id);
     res.json({ ok: true });
   });
 

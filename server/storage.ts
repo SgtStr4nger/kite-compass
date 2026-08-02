@@ -308,6 +308,20 @@ function purgeExpiredDeleted() {
 }
 purgeExpiredDeleted();
 
+// admin_errors table (spec §33)
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS admin_errors (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    area TEXT NOT NULL,
+    record_id TEXT,
+    summary TEXT NOT NULL,
+    error_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'Open',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+`);
+
 ensureColumns("site_pages", [
   { name: "slug", ddl: "slug TEXT NOT NULL UNIQUE" },
   { name: "title", ddl: "title TEXT NOT NULL" },
@@ -611,6 +625,20 @@ export interface CreateRedirectInput {
   targetType: 'spot' | 'manual';
   spotId?: number | null;
 }
+
+export type AdminErrorStatus = "Open" | "Resolved" | "Dismissed";
+
+export interface AdminErrorRow {
+  id: number;
+  area: string;
+  record_id: string | null;
+  summary: string;
+  error_id: string;
+  status: AdminErrorStatus;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface TrashItem {
   category: TrashCategory;
   id: number;
@@ -713,6 +741,13 @@ export interface IStorage {
   updateRedirect(id: number, r: Partial<CreateRedirectInput>): Promise<RedirectRow | undefined>;
   deleteRedirect(id: number): Promise<void>;
   checkRedirectConflicts(fromPath: string, toUrl: string, excludeId?: number): Promise<{ reason: string } | null>;
+  // admin errors (spec §33)
+  logAdminError(entry: { area: string; summary: string; recordId?: string | null }): Promise<AdminErrorRow>;
+  listAdminErrors(filter?: { status?: AdminErrorStatus }): Promise<AdminErrorRow[]>;
+  dismissAdminError(id: number): Promise<void>;
+  resolveAdminError(id: number): Promise<void>;
+  countOpenAdminErrors(): Promise<number>;
+  purgeOldAdminErrors(): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1289,6 +1324,58 @@ export class DatabaseStorage implements IStorage {
     if (loopRow) return { reason: 'redirect_loop' };
     return null;
   }
+
+  // ── Admin Errors (spec §33) ──
+
+  async logAdminError(entry: { area: string; summary: string; recordId?: string | null }): Promise<AdminErrorRow> {
+    const timestamp = now();
+    const errorId = crypto.randomUUID();
+    const result = sqlite.prepare(
+      `INSERT INTO admin_errors (area, record_id, summary, error_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'Open', ?, ?)`
+    ).run(entry.area, entry.recordId ?? null, entry.summary, errorId, timestamp, timestamp);
+    return sqlite.prepare(
+      `SELECT id, area, record_id, summary, error_id, status, created_at, updated_at FROM admin_errors WHERE id = ?`
+    ).get(Number(result.lastInsertRowid)) as AdminErrorRow;
+  }
+
+  async listAdminErrors(filter?: { status?: AdminErrorStatus }): Promise<AdminErrorRow[]> {
+    if (filter?.status) {
+      return sqlite.prepare(
+        `SELECT id, area, record_id, summary, error_id, status, created_at, updated_at FROM admin_errors WHERE status = ? ORDER BY created_at DESC`
+      ).all(filter.status) as AdminErrorRow[];
+    }
+    return sqlite.prepare(
+      `SELECT id, area, record_id, summary, error_id, status, created_at, updated_at FROM admin_errors ORDER BY created_at DESC`
+    ).all() as AdminErrorRow[];
+  }
+
+  async dismissAdminError(id: number): Promise<void> {
+    sqlite.prepare(`UPDATE admin_errors SET status = 'Dismissed', updated_at = ? WHERE id = ?`).run(now(), id);
+  }
+
+  async resolveAdminError(id: number): Promise<void> {
+    sqlite.prepare(`UPDATE admin_errors SET status = 'Resolved', updated_at = ? WHERE id = ?`).run(now(), id);
+  }
+
+  async countOpenAdminErrors(): Promise<number> {
+    const row = sqlite.prepare(`SELECT COUNT(*) as c FROM admin_errors WHERE status = 'Open'`).get() as { c: number };
+    return row.c;
+  }
+
+  async purgeOldAdminErrors(): Promise<void> {
+    const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+    sqlite.prepare(`DELETE FROM admin_errors WHERE status IN ('Resolved', 'Dismissed') AND updated_at < ?`).run(cutoff);
+  }
 }
 
 export const storage = new DatabaseStorage();
+storage.purgeOldAdminErrors().catch(() => {});
+
+/** Log an admin error (spec §33). Called from background jobs / fatal operation handlers. */
+export async function logError(area: string, summary: string, recordId?: string | null): Promise<void> {
+  try {
+    await storage.logAdminError({ area, summary, recordId });
+  } catch {
+    // Never throw — error logging must not cascade
+  }
+}

@@ -293,6 +293,17 @@ export interface RestoreInfo {
   affectedItems: Array<{ id: number; name: string; recoverable: boolean }>;
 }
 
+export interface AdminError {
+  id: number;
+  area: string;
+  recordId: string | null;
+  summary: string;
+  errorId: string;
+  status: "Open" | "Resolved" | "Dismissed";
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Redirect {
   id: number;
   fromPath: string;
