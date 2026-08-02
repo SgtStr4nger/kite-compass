@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { useLocation, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { SiteLayout } from "@/components/SiteChrome";
-import { FilterPanel, FilterState } from "@/components/Filters";
+import { FilterPanel, FilterState, normalizeFilterState } from "@/components/Filters";
 import { filtersToParams, paramsToFilters, getHashSearch } from "@/lib/filterParams";
 import { SpotCard } from "@/components/SpotCard";
 import { SpotMap, MapPoint } from "@/components/SpotMap";
@@ -51,10 +51,12 @@ function SeasonHelp() {
 
 export default function Results() {
   const [, navigate] = useLocation();
-  const [filters, setFilters] = useState<FilterState>(() => paramsToFilters(getHashSearch()));
+  const [rawFilters, setRawFilters] = useState<FilterState>(() => normalizeFilterState(paramsToFilters(getHashSearch())));
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [mobileView, setMobileView] = useState<"list" | "map">("list");
   const cardRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const filters = useMemo(() => normalizeFilterState(rawFilters), [rawFilters]);
+  const setFilters = (next: FilterState) => setRawFilters(normalizeFilterState(next));
 
   useEffect(() => {
     const qs = filtersToParams(filters).toString();
