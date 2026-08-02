@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, Component, type ReactNode } from "react";
+import { useEffect, useMemo, Fragment, Component, type ReactNode } from "react";
 import { MapContainer, TileLayer, Marker, useMap } from "react-leaflet";
 import MarkerClusterGroup from "react-leaflet-cluster";
 import L from "leaflet";
@@ -66,11 +66,11 @@ function PanToSelected({ points, selectedId }: { points: MapPoint[]; selectedId:
 }
 
 // ── Map error boundary ──────────────────────────────────────────────────────
-interface MapErrorBoundaryState { hasError: boolean }
+interface MapErrorBoundaryState { hasError: boolean; retryKey: number }
 class MapErrorBoundary extends Component<{ children: ReactNode }, MapErrorBoundaryState> {
-  state: MapErrorBoundaryState = { hasError: false };
+  state: MapErrorBoundaryState = { hasError: false, retryKey: 0 };
   static getDerivedStateFromError() { return { hasError: true }; }
-  reset() { this.setState({ hasError: false }); }
+  reset() { this.setState(s => ({ hasError: false, retryKey: s.retryKey + 1 })); }
   render() {
     if (this.state.hasError) {
       return (
@@ -86,7 +86,8 @@ class MapErrorBoundary extends Component<{ children: ReactNode }, MapErrorBounda
         </div>
       );
     }
-    return this.props.children;
+    // Keyed fragment forces a fresh MapContainer mount on every retry
+    return <Fragment key={this.state.retryKey}>{this.props.children}</Fragment>;
   }
 }
 // ────────────────────────────────────────────────────────────────────────────
@@ -114,8 +115,6 @@ export function SpotMap({
     if (!valid.length) return [20, 0];
     return [valid[0].lat, valid[0].lng];
   }, [valid]);
-  const ref = useRef<L.Map | null>(null);
-  const [, forceRender] = useState(0);
 
   return (
     <div className={className} data-testid="spot-map">
@@ -128,7 +127,6 @@ export function SpotMap({
           doubleClickZoom={interactive}
           zoomControl={interactive}
           style={{ height: "100%", width: "100%", background: "#dfeaec" }}
-          ref={(m) => { ref.current = m as any; if (m) forceRender(n => n + 1); }}
         >
           <TileLayer
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>'
