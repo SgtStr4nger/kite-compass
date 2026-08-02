@@ -2,10 +2,11 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import crypto from 'node:crypto';
-import { execSync } from 'node:child_process';
+import { execFile, type ExecFileException } from 'node:child_process';
 import { and, eq } from "drizzle-orm";
 import * as XLSX from "xlsx";
 import { db, storage, sqlite, logError } from "./storage";
+import { log } from "./log";
 import type { ListingsFilter, SeoContent, TrashCategory, RedirectRow, AdminErrorStatus } from "./storage";
 import { enrichSpotById, MissingCoordinatesError } from "./services/enrichment";
 import { getContinentForCountry } from "@shared/locations";
@@ -38,6 +39,8 @@ const EXCEL_ACTIVE_STATUSES = new Set(["Uploading", "Validating", "Ready for con
 const EXCEL_TERMINAL_STATUSES = new Set(["Completed", "Failed", "Cancelled"]);
 const SPOT_TYPES = new Set(["flat-water", "chop", "waves", "lagoon", "foil", "freestyle"]);
 const RIDER_LEVELS = new Set(["beginner", "intermediate", "advanced"]);
+const DEPLOY_SCRIPT_PATH = "/home/malte/kite-compass/deploy.sh";
+const DEPLOY_TIMEOUT_MS = 10 * 60 * 1000;
 const VIBE_TAGS = new Set(["city", "town", "village", "remote", "touristy", "local-scene", "family-friendly", "nightlife"]);
 const WATER_STATES = new Set(["Flat", "Choppy", "Wave", "Mixed"]);
 const SCHOOL_SPORTS = new Set(["Kitesurfing", "Wingfoiling", "Kitefoiling", "Surfing"]);
@@ -84,6 +87,9 @@ type ExcelStatusRow = {
   dismissed: number;
   updated_at: string | null;
 };
+type DeployScriptResult =
+  | { ok: true; stdout: string; stderr?: string }
+  | { ok: false; error: string; stdout?: string; stderr?: string };
 const excelPreviewSessions = new Map<string, ExcelPreviewSession>();
 let weatherImportActive = false;
 
@@ -526,6 +532,39 @@ function isAuthed(req: Request): boolean {
   const parsed = verifyToken(token);
   if (!parsed) return false;
   return Date.now() - parsed.lastActivityAt <= INACTIVITY_TIMEOUT_MS;
+}
+function runDeployScript(): Promise<DeployScriptResult> {
+  return new Promise((resolve) => {
+    execFile(
+      DEPLOY_SCRIPT_PATH,
+      [],
+      {
+        timeout: DEPLOY_TIMEOUT_MS,
+        maxBuffer: 10 * 1024 * 1024,
+      },
+      (error: ExecFileException | null, stdout: string, stderr: string) => {
+        const cleanStdout = stdout.trim();
+        const cleanStderr = stderr.trim();
+
+        if (!error) {
+          resolve({
+            ok: true,
+            stdout: cleanStdout,
+            ...(cleanStderr ? { stderr: cleanStderr } : {}),
+          });
+          return;
+        }
+
+        const timedOut = Boolean(error.killed) || /timed out/i.test(error.message);
+        resolve({
+          ok: false,
+          error: timedOut ? "Deploy script timed out" : error.message,
+          ...(cleanStdout ? { stdout: cleanStdout } : {}),
+          ...(cleanStderr ? { stderr: cleanStderr } : {}),
+        });
+      },
+    );
+  });
 }
 
 /* ───────── Serialization: parse JSON tag columns to arrays ───────── */
@@ -2468,54 +2507,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json({ ok: true });
   });
 
-  /* ══════════════ DEPLOYMENT ══════════════ */
-  // Deploy the latest code from GitHub: git pull → npm ci → npm run build → pm2 restart
-  app.post("/api/admin/deploy", requireAuth, async (req, res) => {
-    try {
-      log("Starting deployment...");
-      
-      // Run deployment commands synchronously with timeout
-      const commands = [
-        "git pull origin main",
-        "npm ci",
-        "npm run build",
-        "pm2 restart kite-compass",
-      ];
+  app.post("/api/admin/deploy", requireAuth, requireMainAdmin, async (req, res) => {
+    const user = (req as any).user as { email?: string; id?: number } | undefined;
+    log(`Deploy triggered by ${user?.email ?? `user ${user?.id ?? "unknown"}`}`, "deploy");
 
-      const results: string[] = [];
-      for (const cmd of commands) {
-        log(`Executing: ${cmd}`);
-        try {
-          const output = execSync(cmd, { 
-            cwd: process.cwd(),
-            stdio: 'pipe',
-            timeout: 5 * 60 * 1000,
-            encoding: 'utf-8',
-          });
-          results.push(`✓ ${cmd}`);
-          log(`✓ ${cmd}`);
-        } catch (error: any) {
-          const errorMsg = error.stderr || error.stdout || String(error);
-          results.push(`✗ ${cmd}: ${errorMsg.substring(0, 200)}`);
-          log(`✗ ${cmd}: ${errorMsg.substring(0, 200)}`);
-          throw new Error(`Deployment failed at "${cmd}": ${errorMsg.substring(0, 500)}`);
-        }
-      }
-
-      log("✓ Deployment completed successfully");
-      res.json({ 
-        ok: true, 
-        message: "Deployment successful",
-        steps: results,
-      });
-    } catch (error: any) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      log(`✗ Deployment failed: ${errorMsg}`);
-      res.status(500).json({ 
-        error: errorMsg,
-        message: "Deployment failed",
-      });
+    const result = await runDeployScript();
+    if (result.ok) {
+      const lastLine = result.stdout.split(/\r?\n/).filter(Boolean).at(-1) ?? "Deployment complete.";
+      log(`Deploy completed: ${lastLine}`, "deploy");
+      return res.json(result);
     }
+
+    log(`Deploy failed: ${result.error}`, "deploy");
+    if (result.stderr) log(`stderr: ${result.stderr}`, "deploy");
+    return res.status(500).json(result);
   });
 
   return httpServer;
