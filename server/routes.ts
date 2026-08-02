@@ -2,6 +2,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import crypto from 'node:crypto';
+import { execSync } from 'node:child_process';
 import { and, eq } from "drizzle-orm";
 import * as XLSX from "xlsx";
 import { db, storage, sqlite, logError } from "./storage";
@@ -27,7 +28,7 @@ type WeatherStatus = "Missing" | "Up to date" | "Up to date · Manual changes" |
 
 let scoringRecalcActive = false;
 
-const REFRESH_SPOT_DELAY_MS = 900;
+const REFRESH_SPOT_DELAY_MS = 1500;
 const OPEN_METEO_MAX_REQUESTS_PER_MINUTE = 50;
 const ESTIMATED_REQUESTS_PER_SPOT_REFRESH = 2;
 const OPEN_METEO_WINDOW_MS = 60_000;
@@ -350,81 +351,7 @@ async function recalculateScoresForAllSpots(config: ScoringConfig, commitPublish
       rowsBySpot.set(row.spotId, existing);
     }
 
-    async function recalculateScoresForSpotIds(config: ScoringConfig, spotIds: number[], progressMessage = "spots recalculated"): Promise<number> {
-      if (scoringRecalcActive) throw new Error("score recalculation already running");
-      const targetIds = Array.from(new Set(spotIds.filter((id) => Number.isFinite(id) && id > 0)));
-      if (!targetIds.length) return 0;
-      scoringRecalcActive = true;
-      try {
-        const rows = await storage.listAllMonthly(false);
-        const spotRows = (await storage.listSpots(false)).filter((spot) => targetIds.includes(spot.id));
-        const rankingModeBySpotId = new Map(spotRows.map((spot) => [spot.id, spot.rankingMode]));
-        const rowsBySpot = new Map<number, typeof rows>();
-        for (const row of rows) {
-          if (!targetIds.includes(row.spotId)) continue;
-          const existing = rowsBySpot.get(row.spotId) ?? [];
-          existing.push(row);
-          rowsBySpot.set(row.spotId, existing);
-        }
 
-        await storage.setScoringStatus({
-          status: "Recalculating scores",
-          totalSpots: spotRows.length,
-          completedSpots: 0,
-          message: spotRows.length ? `0 / ${spotRows.length} ${progressMessage}` : "No spots to recalculate",
-          dismissible: false,
-          dismissed: false,
-        });
-
-        let updated = 0;
-        let completed = 0;
-        for (const spot of spotRows) {
-          const rankingMode = rankingModeBySpotId.get(spot.id);
-          const spotMonthly = rowsBySpot.get(spot.id) ?? [];
-          const scores = spotMonthly.map((row) => rankingMode === "auto" ? calculateAutoMonthlyScore(row, config) : resolveMonthlyScore(row, rankingMode));
-          const bestScore = bestEvaluableScore(scores);
-          for (let i = 0; i < spotMonthly.length; i++) {
-            const row = spotMonthly[i];
-            const score = scores[i];
-            const seasonLabel = deriveSeasonLabelFromScore(score, bestScore, config);
-            await storage.updateMonthly(row.id, {
-              ...(rankingMode === "auto" ? { automaticWindScore: score } : {}),
-              seasonLabel,
-            } as any);
-            updated++;
-          }
-          completed++;
-          await storage.setScoringStatus({
-            status: "Recalculating scores",
-            totalSpots: spotRows.length,
-            completedSpots: completed,
-            message: `${completed} / ${spotRows.length} ${progressMessage}`,
-            dismissible: false,
-            dismissed: false,
-          });
-        }
-
-        await storage.setScoringStatus({
-          status: "Scores published",
-          totalSpots: spotRows.length,
-          completedSpots: spotRows.length,
-          message: `Scores recalculated for ${spotRows.length} spots`,
-          dismissible: true,
-          dismissed: false,
-        });
-        return updated;
-      } catch (error) {
-        await storage.setScoringStatus({
-          status: "Failed",
-          message: error instanceof Error ? error.message : "Score recalculation failed",
-          dismissible: true,
-          dismissed: false,
-        });
-        throw error;
-      } finally {
-        scoringRecalcActive = false;
-      }
-    }
 
     await storage.setScoringStatus({
       status: "Recalculating scores",
@@ -827,6 +754,82 @@ function parseStayRow(values: Record<string, string>, knownStayIds: Set<number>,
       spotIds: Array.from(new Set(spotIds)),
     },
   };
+}
+
+async function recalculateScoresForSpotIds(config: ScoringConfig, spotIds: number[], progressMessage = "spots recalculated"): Promise<number> {
+  if (scoringRecalcActive) throw new Error("score recalculation already running");
+  const targetIds = Array.from(new Set(spotIds.filter((id) => Number.isFinite(id) && id > 0)));
+  if (!targetIds.length) return 0;
+  scoringRecalcActive = true;
+  try {
+    const rows = await storage.listAllMonthly(false);
+    const spotRows = (await storage.listSpots(false)).filter((spot) => targetIds.includes(spot.id));
+    const rankingModeBySpotId = new Map(spotRows.map((spot) => [spot.id, spot.rankingMode]));
+    const rowsBySpot = new Map<number, typeof rows>();
+    for (const row of rows) {
+      if (!targetIds.includes(row.spotId)) continue;
+      const existing = rowsBySpot.get(row.spotId) ?? [];
+      existing.push(row);
+      rowsBySpot.set(row.spotId, existing);
+    }
+
+    await storage.setScoringStatus({
+      status: "Recalculating scores",
+      totalSpots: spotRows.length,
+      completedSpots: 0,
+      message: spotRows.length ? `0 / ${spotRows.length} ${progressMessage}` : "No spots to recalculate",
+      dismissible: false,
+      dismissed: false,
+    });
+
+    let updated = 0;
+    let completed = 0;
+    for (const spot of spotRows) {
+      const rankingMode = rankingModeBySpotId.get(spot.id);
+      const spotMonthly = rowsBySpot.get(spot.id) ?? [];
+      const scores = spotMonthly.map((row) => rankingMode === "auto" ? calculateAutoMonthlyScore(row, config) : resolveMonthlyScore(row, rankingMode));
+      const bestScore = bestEvaluableScore(scores);
+      for (let i = 0; i < spotMonthly.length; i++) {
+        const row = spotMonthly[i];
+        const score = scores[i];
+        const seasonLabel = deriveSeasonLabelFromScore(score, bestScore, config);
+        await storage.updateMonthly(row.id, {
+          ...(rankingMode === "auto" ? { automaticWindScore: score } : {}),
+          seasonLabel,
+        } as any);
+        updated++;
+      }
+      completed++;
+      await storage.setScoringStatus({
+        status: "Recalculating scores",
+        totalSpots: spotRows.length,
+        completedSpots: completed,
+        message: `${completed} / ${spotRows.length} ${progressMessage}`,
+        dismissible: false,
+        dismissed: false,
+      });
+    }
+
+    await storage.setScoringStatus({
+      status: "Scores published",
+      totalSpots: spotRows.length,
+      completedSpots: spotRows.length,
+      message: `Scores recalculated for ${spotRows.length} spots`,
+      dismissible: true,
+      dismissed: false,
+    });
+    return updated;
+  } catch (error) {
+    await storage.setScoringStatus({
+      status: "Failed",
+      message: error instanceof Error ? error.message : "Score recalculation failed",
+      dismissible: true,
+      dismissed: false,
+    });
+    throw error;
+  } finally {
+    scoringRecalcActive = false;
+  }
 }
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
@@ -2463,6 +2466,56 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const id = Number(req.params.id);
     await storage.dismissAdminError(id);
     res.json({ ok: true });
+  });
+
+  /* ══════════════ DEPLOYMENT ══════════════ */
+  // Deploy the latest code from GitHub: git pull → npm ci → npm run build → pm2 restart
+  app.post("/api/admin/deploy", requireAuth, async (req, res) => {
+    try {
+      log("Starting deployment...");
+      
+      // Run deployment commands synchronously with timeout
+      const commands = [
+        "git pull origin main",
+        "npm ci",
+        "npm run build",
+        "pm2 restart kite-compass",
+      ];
+
+      const results: string[] = [];
+      for (const cmd of commands) {
+        log(`Executing: ${cmd}`);
+        try {
+          const output = execSync(cmd, { 
+            cwd: process.cwd(),
+            stdio: 'pipe',
+            timeout: 5 * 60 * 1000,
+            encoding: 'utf-8',
+          });
+          results.push(`✓ ${cmd}`);
+          log(`✓ ${cmd}`);
+        } catch (error: any) {
+          const errorMsg = error.stderr || error.stdout || String(error);
+          results.push(`✗ ${cmd}: ${errorMsg.substring(0, 200)}`);
+          log(`✗ ${cmd}: ${errorMsg.substring(0, 200)}`);
+          throw new Error(`Deployment failed at "${cmd}": ${errorMsg.substring(0, 500)}`);
+        }
+      }
+
+      log("✓ Deployment completed successfully");
+      res.json({ 
+        ok: true, 
+        message: "Deployment successful",
+        steps: results,
+      });
+    } catch (error: any) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      log(`✗ Deployment failed: ${errorMsg}`);
+      res.status(500).json({ 
+        error: errorMsg,
+        message: "Deployment failed",
+      });
+    }
   });
 
   return httpServer;
