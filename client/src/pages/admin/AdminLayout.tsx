@@ -3,7 +3,7 @@ import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { CompassMark } from "@/components/Logo";
 import { Button } from "@/components/ui/button";
-import { LogOut, LayoutGrid, Database, FileText, ExternalLink, School, Hotel, Users, Search, Trash2, ArrowRightLeft, AlertCircle, CloudSun, Zap } from "lucide-react";
+import { LogOut, LayoutGrid, Database, FileText, ExternalLink, School, Hotel, Users, Search, Trash2, ArrowRightLeft, AlertCircle, CloudSun } from "lucide-react";
 import { applyRobotsMetadata } from "@/lib/metadata";
 import { api } from "@/lib/api";
 import { ExcelImportStatus, ScoringStatus, WeatherRefreshStatus } from "@/lib/types";
@@ -17,9 +17,6 @@ export function AdminLayout({ children }: { children: ReactNode }) {
   const [scoringStatus, setScoringStatus] = useState<ScoringStatus | null>(null);
   const [weatherStatus, setWeatherStatus] = useState<WeatherRefreshStatus | null>(null);
   const [openErrorCount, setOpenErrorCount] = useState(0);
-  const [deploymentActive, setDeploymentActive] = useState(false);
-  const [deploymentMessage, setDeploymentMessage] = useState("");
-  const [deploymentError, setDeploymentError] = useState("");
 
   useEffect(() => {
     if (mustChangePassword && location !== "/admin/change-password") navigate("/admin/change-password");
@@ -155,24 +152,6 @@ export function AdminLayout({ children }: { children: ReactNode }) {
       setWeatherStatus(prev => prev ? { ...prev, dismissed: true, visible: false, active: false } : prev);
     } catch {}
   };
-  
-  const handleDeploy = async () => {
-    setDeploymentActive(true);
-    setDeploymentError("");
-    setDeploymentMessage("Starting deployment...");
-    try {
-      const result = await api<{ ok: boolean; message: string; steps: string[] }>("POST", "/api/admin/deploy");
-      setDeploymentMessage(`✓ ${result.message}\n${result.steps.join("\n")}`);
-      setTimeout(() => {
-        setDeploymentActive(false);
-        setDeploymentMessage("");
-      }, 3000);
-    } catch (err: any) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      setDeploymentError(`✗ Deployment failed: ${errorMsg}`);
-      setDeploymentActive(false);
-    }
-  };
   const openImportCategory = () => {
     if (!excelStatus?.category) return;
     if (excelStatus.category === "spots") navigate("/admin/spots");
@@ -216,15 +195,6 @@ export function AdminLayout({ children }: { children: ReactNode }) {
             {navLink("/admin/redirects", <ArrowRightLeft className="h-4 w-4" />, "Redirects", "link-admin-redirects")}
             {navLink("/admin/users", <Users className="h-4 w-4" />, "Users", "link-admin-users")}
             {navLink("/admin/trash", <Trash2 className="h-4 w-4" />, "Trash", "link-admin-trash")}
-            <Button 
-              variant="ghost" 
-              size="sm" 
-              className="w-full justify-start gap-2 text-sidebar-foreground hover:bg-sidebar-accent"
-              onClick={handleDeploy}
-              disabled={deploymentActive}
-            >
-              <Zap className="h-4 w-4" /> Deploy
-            </Button>
             <Link href="/admin/errors"
               className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium no-underline transition-colors ${location === "/admin/errors" ? "bg-sidebar-accent text-sidebar-foreground" : "text-sidebar-foreground/90 hover:bg-sidebar-accent"}`}
               data-testid="link-admin-errors">
@@ -306,19 +276,6 @@ export function AdminLayout({ children }: { children: ReactNode }) {
               {!weatherStatus.active && weatherStatus.dismissible && (
                 <Button size="sm" variant="outline" onClick={dismissWeatherBanner}>Dismiss</Button>
               )}
-            </div>
-          </div>
-        )}
-        {(deploymentActive || deploymentMessage || deploymentError) && (
-          <div className={`border-b px-5 py-3 text-sm md:px-8 ${deploymentActive ? "border-blue-300 bg-blue-50 text-blue-900" : deploymentError ? "border-red-300 bg-red-50 text-red-900" : "border-emerald-300 bg-emerald-50 text-emerald-900"}`}>
-            <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
-              <div className="flex-1">
-                {deploymentError ? (
-                  <div className="whitespace-pre-wrap font-mono text-xs">{deploymentError}</div>
-                ) : (
-                  <div className="whitespace-pre-wrap font-mono text-xs">{deploymentMessage}</div>
-                )}
-              </div>
             </div>
           </div>
         )}

@@ -5,13 +5,18 @@ import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
 import { AdminLayout } from "./AdminLayout";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AdminSpotListItem } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
-import { RefreshCw, AlertTriangle, Clock3, ArrowRight, ChevronDown, Search, CheckCircle2, Database } from "lucide-react";
+import { RefreshCw, AlertTriangle, Clock3, ArrowRight, ChevronDown, Search, CheckCircle2, Database, Rocket } from "lucide-react";
+
+type DeployResponse =
+  | { ok: true; stdout: string; stderr?: string }
+  | { ok: false; error: string; stdout?: string; stderr?: string };
 
 function DataPill({ status }: { status?: "fresh" | "dirty" | "missing" }) {
   if (status === "fresh") return <Badge className="bg-emerald-100 text-emerald-900 hover:bg-emerald-100">Fresh</Badge>;
@@ -20,7 +25,7 @@ function DataPill({ status }: { status?: "fresh" | "dirty" | "missing" }) {
 }
 
 export default function AdminData() {
-  const { token } = useAuth();
+  const { token, role } = useAuth();
   const [, navigate] = useLocation();
   const [busy, setBusy] = useState<null | string | number>(null);
   const [view, setView] = useState<"all" | "dirty" | "missing" | "fresh">("all");
@@ -28,6 +33,7 @@ export default function AdminData() {
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [sortBy, setSortBy] = useState<"name" | "updatedAt">("updatedAt");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [deploying, setDeploying] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => { if (!token) navigate("/admin"); }, [token, navigate]);
@@ -124,6 +130,47 @@ export default function AdminData() {
     }
   };
 
+  const deployLatestMain = async () => {
+    if (role !== "main" || !token) return;
+    if (!window.confirm("Trigger deployment of latest main branch?")) return;
+
+    setDeploying(true);
+    try {
+      const res = await fetch("/api/admin/deploy", {
+        method: "POST",
+        cache: "no-store",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const payload = await res.json() as DeployResponse;
+
+      if (res.ok && payload.ok) {
+        const lastLine = payload.stdout.split(/\r?\n/).filter(Boolean).at(-1) ?? "Deployment complete.";
+        toast({ title: "Deployment triggered", description: lastLine });
+        return;
+      }
+
+      const description = [
+        payload.ok ? res.statusText : payload.error,
+        payload.stderr,
+      ].filter(Boolean).join(" \u2014 ");
+      toast({
+        title: "Deployment failed",
+        description: description || "The deploy endpoint returned an error.",
+        variant: "destructive",
+      });
+    } catch (e: any) {
+      toast({
+        title: "Deployment failed",
+        description: String(e.message || e),
+        variant: "destructive",
+      });
+    } finally {
+      setDeploying(false);
+    }
+  };
+
   const primaryPublishScope = selectedIds.length > 0 ? "selected" : "filtered";
   const primaryPublishIds = selectedIds.length > 0 ? selectedIds : visibleIds;
   const primaryPublishLabel = selectedIds.length > 0
@@ -148,6 +195,26 @@ export default function AdminData() {
           Open-Meteo requests this server process: {usage.totalRequests} total, {usage.archiveRequests} archive, {usage.marineRequests} marine, {usage.failedRequests} failed.
         </div>
       )}
+
+      {role === "main" ? (
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <Rocket className="h-4 w-4" />
+              System maintenance
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-sm text-muted-foreground">
+              Pull the latest <code>main</code>, install dependencies, build the app, and restart PM2 using the fixed server-side deploy script.
+            </div>
+            <Button onClick={() => { void deployLatestMain(); }} disabled={deploying} data-testid="button-deploy-latest-main">
+              {deploying ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <Rocket className="mr-2 h-4 w-4" />}
+              Deploy latest main
+            </Button>
+          </CardContent>
+        </Card>
+      ) : null}
 
       {isLoading ? (
         <div className="space-y-3">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-16 w-full rounded-xl" />)}</div>

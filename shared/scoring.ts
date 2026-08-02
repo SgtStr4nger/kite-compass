@@ -97,18 +97,18 @@ function averageDaysInMonth(monthIndex: number, startYear: number, endYear: numb
   return yearCount > 0 ? totalDays / yearCount : 30.4375;
 }
 
-function scoreKiteableDays(days: number, monthIndex: number, cfg: ScoreConfig): number {
+function scoreKiteableDays(days: number, monthIndex: number, cfg: ScoringConfig): number {
   const avgDays = averageDaysInMonth(monthIndex, cfg.startYear, cfg.endYear);
   if (avgDays <= 0) return 0;
   return clamp((days / avgDays) * 10, 0, 10);
 }
 
-function scoreKiteableHours(hours: number, cfg: ScoreConfig): number {
+function scoreKiteableHours(hours: number, cfg: ScoringConfig): number {
   if (cfg.kiteableHoursMax <= 0) return 0;
   return clamp((hours / cfg.kiteableHoursMax) * 10, 0, 10);
 }
 
-function scoreWindStrength(windKnots: number, cfg: ScoreConfig): number {
+function scoreWindStrength(windKnots: number, cfg: ScoringConfig): number {
   if (windKnots <= cfg.windMinKnots) return 0;
   if (windKnots < cfg.windBestStartKnots) {
     const progress = (windKnots - cfg.windMinKnots) / (cfg.windBestStartKnots - cfg.windMinKnots);
@@ -120,7 +120,7 @@ function scoreWindStrength(windKnots: number, cfg: ScoreConfig): number {
   return clamp((1 - progress) * 10, 0, 10);
 }
 
-function scoreGustiness(meanPct: number | null, p90Pct: number | null, cfg: ScoreConfig): number | null {
+function scoreGustiness(meanPct: number | null, p90Pct: number | null, cfg: ScoringConfig): number | null {
   if (meanPct == null || p90Pct == null) return null;
   const evaluated = cfg.gustMeanWeight * meanPct + (1 - cfg.gustMeanWeight) * p90Pct;
   if (evaluated <= cfg.gustGoodThresholdPct) return 10;
