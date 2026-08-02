@@ -1,24 +1,6 @@
 export type RankingMode = "manual" | "auto";
 export type SeasonLabel = "peak" | "side" | "off";
-export const SEASON_THRESHOLD = {
-  peak: 0.8,
-  side: 0.5,
-} as const;
-
-export interface MonthlyScoreInput {
-  month?: string | null;
-  manualScore?: number | null;
-  automaticWindScore?: number | null;
-  avgKiteableWind10mKnots?: number | null;
-  averageBaseWind?: number | null;
-  kiteableDaysCount?: number | null;
-  windDays?: number | null;
-  avgKiteableHoursPerDay?: number | null;
-  gustLoadMeanPct?: number | null;
-  gustLoadP90Pct?: number | null;
-}
-
-interface ScoreConfig {
+export interface ScoringConfig {
   startYear: number;
   endYear: number;
   kiteableDaysWeight: number;
@@ -33,9 +15,11 @@ interface ScoreConfig {
   gustMeanWeight: number;
   gustGoodThresholdPct: number;
   gustBadThresholdPct: number;
+  seasonPeakThreshold: number;
+  seasonSideThreshold: number;
 }
 
-const DEFAULT_SCORE_CONFIG: ScoreConfig = {
+export const DEFAULT_SCORING_CONFIG: ScoringConfig = {
   startYear: 2015,
   endYear: 2024,
   kiteableDaysWeight: 0.45,
@@ -50,7 +34,22 @@ const DEFAULT_SCORE_CONFIG: ScoreConfig = {
   gustMeanWeight: 0.7,
   gustGoodThresholdPct: 25,
   gustBadThresholdPct: 125,
+  seasonPeakThreshold: 0.8,
+  seasonSideThreshold: 0.5,
 };
+
+export interface MonthlyScoreInput {
+  month?: string | null;
+  manualScore?: number | null;
+  automaticWindScore?: number | null;
+  avgKiteableWind10mKnots?: number | null;
+  averageBaseWind?: number | null;
+  kiteableDaysCount?: number | null;
+  windDays?: number | null;
+  avgKiteableHoursPerDay?: number | null;
+  gustLoadMeanPct?: number | null;
+  gustLoadP90Pct?: number | null;
+}
 
 const MONTH_INDEX: Record<string, number> = {
   january: 0,
@@ -130,8 +129,8 @@ function scoreGustiness(meanPct: number | null, p90Pct: number | null, cfg: Scor
   return clamp((1 - progress) * 10, 0, 10);
 }
 
-export function calculateAutoMonthlyScore(row: MonthlyScoreInput, config: Partial<ScoreConfig> = {}): number | null {
-  const cfg: ScoreConfig = { ...DEFAULT_SCORE_CONFIG, ...config };
+export function calculateAutoMonthlyScore(row: MonthlyScoreInput, config: Partial<ScoringConfig> = {}): number | null {
+  const cfg: ScoringConfig = { ...DEFAULT_SCORING_CONFIG, ...config };
   const wind = toFiniteNumber(row.avgKiteableWind10mKnots ?? row.averageBaseWind);
   const days = toFiniteNumber(row.kiteableDaysCount ?? row.windDays);
   const hours = toFiniteNumber(row.avgKiteableHoursPerDay);
@@ -172,9 +171,9 @@ export function bestEvaluableScore(scores: Array<number | null | undefined>): nu
   return Math.max(...evaluableScores);
 }
 
-export function deriveSeasonLabelFromScore(score: number | null, bestScore: number | null): SeasonLabel {
+export function deriveSeasonLabelFromScore(score: number | null, bestScore: number | null, config: Pick<ScoringConfig, "seasonPeakThreshold" | "seasonSideThreshold"> = DEFAULT_SCORING_CONFIG): SeasonLabel {
   if (score == null || bestScore == null) return "off";
-  if (score >= bestScore * SEASON_THRESHOLD.peak) return "peak";
-  if (score >= bestScore * SEASON_THRESHOLD.side) return "side";
+  if (score >= bestScore * config.seasonPeakThreshold) return "peak";
+  if (score >= bestScore * config.seasonSideThreshold) return "side";
   return "off";
 }

@@ -59,13 +59,15 @@ function hasCoords(lat: number | null, lng: number | null): boolean {
 async function applyResult(spotId: number, result: EnrichmentResult, spotPublished: boolean): Promise<number> {
   const existing = await storage.listMonthly(spotId, false); // include drafts
   const byMonth = new Map(existing.map(m => [m.month, m]));
-  const autoScoreByMonth = new Map(result.months.map((em) => [em.month, calculateAutoMonthlyScore(em)]));
+  const scoring = await storage.getScoringContent();
+  const config = scoring.published;
+  const autoScoreByMonth = new Map(result.months.map((em) => [em.month, calculateAutoMonthlyScore(em, config)]));
   const bestScore = bestEvaluableScore(Array.from(autoScoreByMonth.values()));
   let written = 0;
 
   for (const em of result.months) {
     const automaticWindScore = autoScoreByMonth.get(em.month) ?? null;
-    const seasonLabel = deriveSeasonLabelFromScore(automaticWindScore, bestScore);
+    const seasonLabel = deriveSeasonLabelFromScore(automaticWindScore, bestScore, config);
     const metrics = {
       avgKiteableWind10mKnots: em.avgKiteableWind10mKnots,
       kiteableDaysCount: em.kiteableDaysCount,

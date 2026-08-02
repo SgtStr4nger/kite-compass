@@ -10,15 +10,15 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
-import { SpotListItem, FilterDef, SEASON_META, PublicSeoState } from "@/lib/types";
+import { SpotListItem, FilterDef, SEASON_META, PublicSeoState, ScoringConfig } from "@/lib/types";
 import { SlidersHorizontal, MapIcon, List, Compass, Info } from "lucide-react";
 import { applyPageMetadata } from "@/lib/metadata";
 import heroImg from "@/assets/hero.jpg";
-import { SEASON_THRESHOLD } from "@shared/scoring";
+import { DEFAULT_SCORING_CONFIG } from "@shared/scoring";
 
-function SeasonHelp() {
-  const peakPct = Math.round(SEASON_THRESHOLD.peak * 100);
-  const sidePct = Math.round(SEASON_THRESHOLD.side * 100);
+function SeasonHelp({ config }: { config: ScoringConfig }) {
+  const peakPct = Math.round(config.seasonPeakThreshold * 100);
+  const sidePct = Math.round(config.seasonSideThreshold * 100);
   return (
     <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
       <span className="font-medium text-foreground">Season</span>
@@ -76,6 +76,7 @@ export default function Results() {
   const { data: defs = [] } = useQuery<FilterDef[]>({ queryKey: ["/api/filters"] });
   const { data: countries = [] } = useQuery<string[]>({ queryKey: ["/api/countries"] });
   const { data: seo } = useQuery<PublicSeoState>({ queryKey: ["/api/seo"] });
+  const { data: scoring } = useQuery<ScoringConfig>({ queryKey: ["/api/scoring"] });
   const { data: spots, isLoading } = useQuery<SpotListItem[]>({
     queryKey: [`/api/spots?${queryString}`],
   });
@@ -123,6 +124,7 @@ export default function Results() {
   const topSummary = isLoading
     ? "Loading…"
     : `${count} spot${count === 1 ? "" : "s"} ${filters.months.length || filters.query || activeCount > 0 ? "matched" : "available to browse"}`;
+  const seasonConfig = scoring ?? DEFAULT_SCORING_CONFIG;
 
   const filterControls = <FilterPanel defs={defs} countries={countries} state={filters} onChange={setFilters} />;
 
@@ -205,7 +207,7 @@ export default function Results() {
                 <p className="text-sm font-medium text-foreground" data-testid="text-result-count">
                   {resultCountLabel}
                 </p>
-                <SeasonHelp />
+                <SeasonHelp config={seasonConfig} />
               </div>
 
               <div className="space-y-3 lg:pb-2">

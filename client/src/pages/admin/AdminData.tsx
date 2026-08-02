@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AdminSpotListItem } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
-import { RefreshCw, Database, AlertTriangle, CheckCircle2, Clock3, Sparkles } from "lucide-react";
+import { RefreshCw, Database, AlertTriangle, CheckCircle2, Clock3, ArrowRight } from "lucide-react";
 
 function DataPill({ status }: { status?: "fresh" | "dirty" | "missing" }) {
   if (status === "fresh") return <Badge className="bg-emerald-100 text-emerald-900 hover:bg-emerald-100">Fresh</Badge>;
@@ -59,19 +59,6 @@ export default function AdminData() {
     }
   };
 
-  const recalc = async () => {
-    setBusy("scores");
-    try {
-      const out = await api<{ updated: number }>("POST", "/api/admin/scores/recalculate");
-      toast({ title: `Recalculated ${out.updated} monthly scores` });
-      await refetch();
-    } catch (e: any) {
-      toast({ title: "Could not recalculate scores", description: String(e.message || e), variant: "destructive" });
-    } finally {
-      setBusy(null);
-    }
-  };
-
   const publishAllWeather = async () => {
     setBusy("all");
     try {
@@ -103,12 +90,12 @@ export default function AdminData() {
       <div className="mb-6 flex items-start justify-between gap-4">
         <div>
           <h1 className="font-serif text-2xl font-semibold text-foreground">Data</h1>
-          <p className="text-sm text-muted-foreground">Weather refreshes, score recomputation, and stale-data tracking.</p>
+          <p className="text-sm text-muted-foreground">Weather refreshes and stale-data tracking.</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" onClick={recalc} disabled={busy !== null} data-testid="button-recalculate-scores-data">
-            {busy === "scores" ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
-            Recalculate scores
+          <Button variant="outline" onClick={() => navigate("/admin/data/scoring")} data-testid="button-configure-scoring">
+            <ArrowRight className="mr-2 h-4 w-4" />
+            Configure scoring
           </Button>
           <Button variant="outline" onClick={() => run("missing")} disabled={busy !== null} data-testid="button-refresh-missing-data">
             {busy === "missing" ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <Database className="mr-2 h-4 w-4" />}

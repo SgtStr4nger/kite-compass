@@ -6,13 +6,15 @@ import { Button } from "@/components/ui/button";
 import { LogOut, LayoutGrid, Database, FileText, ExternalLink, School, Hotel, Users, Search, Trash2, ArrowRightLeft, AlertCircle } from "lucide-react";
 import { applyRobotsMetadata } from "@/lib/metadata";
 import { api } from "@/lib/api";
-import { ExcelImportStatus } from "@/lib/types";
+import { ExcelImportStatus, ScoringStatus } from "@/lib/types";
+import { Sparkles } from "lucide-react";
 
 export function AdminLayout({ children }: { children: ReactNode }) {
   const { email, logout, mustChangePassword, token } = useAuth();
   const [, navigate] = useLocation();
   const [location] = useLocation();
   const [excelStatus, setExcelStatus] = useState<ExcelImportStatus | null>(null);
+  const [scoringStatus, setScoringStatus] = useState<ScoringStatus | null>(null);
   const [openErrorCount, setOpenErrorCount] = useState(0);
 
   useEffect(() => {
@@ -51,6 +53,33 @@ export function AdminLayout({ children }: { children: ReactNode }) {
     return () => { alive = false; if (timerId !== null) window.clearTimeout(timerId); };
   }, [token]);
 
+  useEffect(() => {
+    if (!token) return;
+    let alive = true;
+    let timerId: number | null = null;
+
+    const scheduleNext = (intervalMs: number) => {
+      if (!alive) return;
+      timerId = window.setTimeout(() => { void poll(); }, intervalMs);
+    };
+
+    const poll = async () => {
+      try {
+        const status = await api<ScoringStatus>("GET", "/api/admin/scoring/status");
+        if (!alive) return;
+        setScoringStatus(status);
+        if (status.active) scheduleNext(2000);
+        else if (!status.visible) scheduleNext(30_000);
+        else scheduleNext(5000);
+      } catch {
+        if (alive) scheduleNext(15_000);
+      }
+    };
+
+    void poll();
+    return () => { alive = false; if (timerId !== null) window.clearTimeout(timerId); };
+  }, [token]);
+
   // Poll open error count for nav badge
   useEffect(() => {
     if (!token) return;
@@ -81,6 +110,12 @@ export function AdminLayout({ children }: { children: ReactNode }) {
     try {
       await api("POST", "/api/admin/excel/dismiss");
       setExcelStatus(prev => prev ? { ...prev, dismissed: true, visible: false } : prev);
+    } catch {}
+  };
+  const dismissScoringBanner = async () => {
+    try {
+      await api("POST", "/api/admin/scoring/dismiss");
+      setScoringStatus(prev => prev ? { ...prev, dismissed: true, visible: false, active: false } : prev);
     } catch {}
   };
   const openImportCategory = () => {
@@ -175,6 +210,22 @@ export function AdminLayout({ children }: { children: ReactNode }) {
                   <Button size="sm" variant="outline" onClick={dismissBanner}>Dismiss</Button>
                 )}
               </div>
+            </div>
+          </div>
+        )}
+        {scoringStatus?.visible && (
+          <div className={`border-b px-5 py-3 text-sm md:px-8 ${scoringStatus.active ? "border-amber-300 bg-amber-50 text-amber-900" : "border-emerald-300 bg-emerald-50 text-emerald-900"}`}>
+            <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold ${scoringStatus.active ? "bg-amber-100 text-amber-900" : "bg-emerald-100 text-emerald-900"}`}>
+                  {scoringStatus.active ? <Sparkles className="h-3.5 w-3.5" /> : <Sparkles className="h-3.5 w-3.5" />}
+                  {scoringStatus.status}
+                </span>
+                <span className="font-medium">{scoringStatus.message || " "}</span>
+              </div>
+              {!scoringStatus.active && scoringStatus.dismissible && (
+                <Button size="sm" variant="outline" onClick={dismissScoringBanner}>Dismiss</Button>
+              )}
             </div>
           </div>
         )}

@@ -272,6 +272,29 @@ export const insertSeoSettingsSchema = createInsertSchema(seoSettings).omit({ id
 export type InsertSeoSettings = z.infer<typeof insertSeoSettingsSchema>;
 export type SeoSettings = typeof seoSettings.$inferSelect;
 
+/* ─────────────── Scoring settings (shared draft/publish) ─────────────── */
+export const scoringSettings = sqliteTable("scoring_settings", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  draftJson: text("draft_json").notNull().default("{}"),
+  publishedJson: text("published_json").notNull().default("{}"),
+  hasDraft: integer("has_draft", { mode: "boolean" }).default(true),
+  publishedAt: text("published_at"),
+  updatedAt: text("updated_at"),
+});
+export type ScoringSettings = typeof scoringSettings.$inferSelect;
+
+export const scoringRecalcState = sqliteTable("scoring_recalc_state", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  status: text("status").notNull().default("Idle"),
+  totalSpots: integer("total_spots").notNull().default(0),
+  completedSpots: integer("completed_spots").notNull().default(0),
+  message: text("message").notNull().default(""),
+  dismissible: integer("dismissible", { mode: "boolean" }).default(false),
+  dismissed: integer("dismissed", { mode: "boolean" }).default(false),
+  updatedAt: text("updated_at"),
+});
+export type ScoringRecalcState = typeof scoringRecalcState.$inferSelect;
+
 /* ─────────────── Redirects (spec §29) ─────────────── */
 export const redirects = sqliteTable("redirects", {
   id: integer("id").primaryKey({ autoIncrement: true }),

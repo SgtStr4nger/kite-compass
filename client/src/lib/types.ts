@@ -119,6 +119,46 @@ export interface SeoAdminState {
   canPublish: boolean;
 }
 
+export interface ScoringConfig {
+  startYear: number;
+  endYear: number;
+  kiteableDaysWeight: number;
+  kiteableHoursWeight: number;
+  windStrengthWeight: number;
+  gustinessWeight: number;
+  kiteableHoursMax: number;
+  windMinKnots: number;
+  windBestStartKnots: number;
+  windBestEndKnots: number;
+  windCutoffKnots: number;
+  gustMeanWeight: number;
+  gustGoodThresholdPct: number;
+  gustBadThresholdPct: number;
+  seasonPeakThreshold: number;
+  seasonSideThreshold: number;
+}
+
+export interface ScoringAdminState {
+  draft: ScoringConfig;
+  published: ScoringConfig;
+  hasDraft: boolean;
+  publishedAt: string | null;
+  updatedAt: string | null;
+  canPublish: boolean;
+}
+
+export interface ScoringStatus {
+  status: "Idle" | "Recalculating scores" | "Scores published" | "Failed";
+  totalSpots: number;
+  completedSpots: number;
+  message: string;
+  dismissible: boolean;
+  dismissed: boolean;
+  updatedAt: string | null;
+  active: boolean;
+  visible: boolean;
+}
+
 export interface AdminUser {
   id: number;
   email: string;

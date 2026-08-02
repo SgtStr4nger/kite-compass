@@ -1,4 +1,4 @@
-import { users, spots, monthlyRecords, filterDefs, schools, stays, sitePages, legalPages, seoSettings, spotSchools, spotStays } from '@shared/schema';
+import { users, spots, monthlyRecords, filterDefs, schools, stays, sitePages, legalPages, seoSettings, scoringSettings, scoringRecalcState, spotSchools, spotStays } from '@shared/schema';
 import type {
   User, InsertUser, Spot, InsertSpot, MonthlyRecord, InsertMonthly,
   School, InsertSchool, Stay, InsertStay,
@@ -10,6 +10,7 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
 import { eq, and, inArray, isNull } from "drizzle-orm";
 import crypto from "node:crypto";
+import { DEFAULT_SCORING_CONFIG, type ScoringConfig } from "@shared/scoring";
 
 export const sqlite = new Database("data.db");
 sqlite.pragma("journal_mode = WAL");
@@ -249,6 +250,24 @@ sqlite.exec(`
     created_at TEXT,
     updated_at TEXT
   );
+  CREATE TABLE IF NOT EXISTS scoring_settings (
+    id INTEGER PRIMARY KEY CHECK(id = 1),
+    draft_json TEXT NOT NULL,
+    published_json TEXT NOT NULL,
+    has_draft INTEGER DEFAULT 1,
+    published_at TEXT,
+    updated_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS scoring_recalc_state (
+    id INTEGER PRIMARY KEY CHECK(id = 1),
+    status TEXT NOT NULL DEFAULT 'Idle',
+    total_spots INTEGER NOT NULL DEFAULT 0,
+    completed_spots INTEGER NOT NULL DEFAULT 0,
+    message TEXT NOT NULL DEFAULT '',
+    dismissible INTEGER NOT NULL DEFAULT 0,
+    dismissed INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT
+  );
   CREATE TABLE IF NOT EXISTS redirects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     from_path TEXT NOT NULL UNIQUE,
@@ -450,6 +469,48 @@ function ensureDefaultSeoSettings() {
 }
 ensureDefaultSeoSettings();
 
+function normalizeScoringConfig(raw: Partial<ScoringConfig> | null | undefined): ScoringConfig {
+  return { ...DEFAULT_SCORING_CONFIG, ...(raw ?? {}) };
+}
+
+function parseScoringConfig(raw: string | null | undefined): ScoringConfig {
+  if (!raw) return { ...DEFAULT_SCORING_CONFIG };
+  try {
+    return normalizeScoringConfig(JSON.parse(raw));
+  } catch {
+    return { ...DEFAULT_SCORING_CONFIG };
+  }
+}
+
+function ensureDefaultScoringSettings() {
+  const row = db.select().from(scoringSettings).get();
+  if (row) return;
+  const timestamp = now();
+  const seed = JSON.stringify(DEFAULT_SCORING_CONFIG);
+  db.insert(scoringSettings).values({
+    id: 1,
+    draftJson: seed,
+    publishedJson: seed,
+    hasDraft: false,
+    publishedAt: timestamp,
+    updatedAt: timestamp,
+  } as any).run();
+  const stateRow = db.select().from(scoringRecalcState).get();
+  if (!stateRow) {
+    db.insert(scoringRecalcState).values({
+      id: 1,
+      status: "Idle",
+      totalSpots: 0,
+      completedSpots: 0,
+      message: "",
+      dismissible: false,
+      dismissed: false,
+      updatedAt: timestamp,
+    } as any).run();
+  }
+}
+ensureDefaultScoringSettings();
+
 function ensureSpotPublicIds() {
   const rows = db.select({ id: spots.id, publicId: spots.publicId }).from(spots).all();
   for (const row of rows) {
@@ -584,6 +645,27 @@ export interface SeoContent {
   hasDraft: boolean;
   publishedAt: string | null;
   updatedAt: string | null;
+}
+
+export interface ScoringContent {
+  draft: ScoringConfig;
+  published: ScoringConfig;
+  hasDraft: boolean;
+  publishedAt: string | null;
+  updatedAt: string | null;
+  canPublish: boolean;
+}
+
+export interface ScoringStatus {
+  status: "Idle" | "Recalculating scores" | "Scores published" | "Failed";
+  totalSpots: number;
+  completedSpots: number;
+  message: string;
+  dismissible: boolean;
+  dismissed: boolean;
+  updatedAt: string | null;
+  active: boolean;
+  visible: boolean;
 }
 
 export type AdminRole = "main" | "standard";
@@ -730,6 +812,13 @@ export interface IStorage {
   getSeoContent(): Promise<SeoContent>;
   saveSeoDraft(next: Pick<SeoContent, "homepageTitleDraft" | "homepageDescriptionDraft" | "exploreTitleDraft" | "exploreDescriptionDraft" | "methodologyTitleDraft" | "methodologyDescriptionDraft">): Promise<SeoContent>;
   publishSeoDraft(): Promise<SeoContent>;
+  // scoring settings (shared draft/publish)
+  getScoringContent(): Promise<ScoringContent>;
+  saveScoringDraft(next: ScoringConfig): Promise<ScoringContent>;
+  commitScoringDraft(): Promise<ScoringContent>;
+  getScoringStatus(): Promise<ScoringStatus>;
+  setScoringStatus(next: Partial<Omit<ScoringStatus, "active" | "visible">> & { status: ScoringStatus["status"] }): Promise<ScoringStatus>;
+  dismissScoringStatus(): Promise<ScoringStatus>;
   // trash (soft delete)
   listTrash(): Promise<TrashItem[]>;
   getRestoreInfo(category: TrashCategory, id: number): Promise<RestoreInfo | undefined>;
@@ -1188,6 +1277,101 @@ export class DatabaseStorage implements IStorage {
       } as any).where(eq(seoSettings.id, row.id)).returning().get();
     })();
     return toSeoContent(updated);
+  }
+
+  async getScoringContent(): Promise<ScoringContent> {
+    const row = db.select().from(scoringSettings).get();
+    if (!row) throw new Error("scoring settings not initialized");
+    const draft = parseScoringConfig(row.draftJson);
+    const published = parseScoringConfig(row.publishedJson);
+    return {
+      draft,
+      published,
+      hasDraft: !!row.hasDraft,
+      publishedAt: row.publishedAt ?? null,
+      updatedAt: row.updatedAt ?? null,
+      canPublish: true,
+    };
+  }
+
+  async saveScoringDraft(next: ScoringConfig): Promise<ScoringContent> {
+    const row = db.select().from(scoringSettings).get();
+    if (!row) throw new Error("scoring settings not initialized");
+    const updated = db.update(scoringSettings).set({
+      draftJson: JSON.stringify(normalizeScoringConfig(next)),
+      hasDraft: true,
+      updatedAt: now(),
+    } as any).where(eq(scoringSettings.id, row.id)).returning().get();
+    return {
+      draft: parseScoringConfig(updated.draftJson),
+      published: parseScoringConfig(updated.publishedJson),
+      hasDraft: !!updated.hasDraft,
+      publishedAt: updated.publishedAt ?? null,
+      updatedAt: updated.updatedAt ?? null,
+      canPublish: true,
+    };
+  }
+
+  async commitScoringDraft(): Promise<ScoringContent> {
+    const row = db.select().from(scoringSettings).get();
+    if (!row) throw new Error("scoring settings not initialized");
+    const nextPublishedAt = now();
+    const updated = sqlite.transaction(() => db.update(scoringSettings).set({
+      publishedJson: row.draftJson,
+      hasDraft: false,
+      publishedAt: nextPublishedAt,
+      updatedAt: nextPublishedAt,
+    } as any).where(eq(scoringSettings.id, row.id)).returning().get())();
+    return {
+      draft: parseScoringConfig(updated.draftJson),
+      published: parseScoringConfig(updated.publishedJson),
+      hasDraft: !!updated.hasDraft,
+      publishedAt: updated.publishedAt ?? null,
+      updatedAt: updated.updatedAt ?? null,
+      canPublish: true,
+    };
+  }
+
+  async getScoringStatus(): Promise<ScoringStatus> {
+    const row = db.select().from(scoringRecalcState).get();
+    if (!row) throw new Error("scoring state not initialized");
+    const status = (row.status as ScoringStatus["status"]) || "Idle";
+    const dismissed = !!row.dismissed;
+    const active = status === "Recalculating scores";
+    const visible = active || (!dismissed && status !== "Idle");
+    return {
+      status,
+      totalSpots: row.totalSpots ?? 0,
+      completedSpots: row.completedSpots ?? 0,
+      message: row.message ?? "",
+      dismissible: !!row.dismissible,
+      dismissed,
+      updatedAt: row.updatedAt ?? null,
+      active,
+      visible,
+    };
+  }
+
+  async setScoringStatus(next: Partial<Omit<ScoringStatus, "active" | "visible">> & { status: ScoringStatus["status"] }): Promise<ScoringStatus> {
+    const row = db.select().from(scoringRecalcState).get();
+    if (!row) throw new Error("scoring state not initialized");
+    const updated = db.update(scoringRecalcState).set({
+      status: next.status,
+      totalSpots: next.totalSpots ?? row.totalSpots ?? 0,
+      completedSpots: next.completedSpots ?? row.completedSpots ?? 0,
+      message: next.message ?? row.message ?? "",
+      dismissible: next.dismissible ?? row.dismissible ?? false,
+      dismissed: next.dismissed ?? row.dismissed ?? false,
+      updatedAt: now(),
+    } as any).where(eq(scoringRecalcState.id, row.id)).returning().get();
+    return this.getScoringStatus();
+  }
+
+  async dismissScoringStatus(): Promise<ScoringStatus> {
+    const row = db.select().from(scoringRecalcState).get();
+    if (!row) throw new Error("scoring state not initialized");
+    db.update(scoringRecalcState).set({ dismissed: true, updatedAt: now() } as any).where(eq(scoringRecalcState.id, row.id)).run();
+    return this.getScoringStatus();
   }
 
   async listTrash(): Promise<TrashItem[]> {

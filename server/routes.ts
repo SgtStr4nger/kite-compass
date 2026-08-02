@@ -8,7 +8,7 @@ import { db, storage, sqlite, logError } from "./storage";
 import type { ListingsFilter, SeoContent, TrashCategory, RedirectRow, AdminErrorStatus } from "./storage";
 import { enrichSpotById, MissingCoordinatesError } from "./services/enrichment";
 import { getContinentForCountry } from "@shared/locations";
-import { bestEvaluableScore, calculateAutoMonthlyScore, deriveSeasonLabelFromScore, resolveMonthlyScore } from "@shared/scoring";
+import { bestEvaluableScore, calculateAutoMonthlyScore, deriveSeasonLabelFromScore, resolveMonthlyScore, type ScoringConfig } from "@shared/scoring";
 import { insertSpotSchema, insertMonthlySchema, monthlyRecords, schools, spots, stays, spotSchools, spotStays } from "@shared/schema";
 import type { Spot, MonthlyRecord, InsertMonthly, InsertSchool, InsertStay } from "@shared/schema";
 
@@ -24,6 +24,8 @@ type DataStatus = "fresh" | "dirty" | "missing";
 type ContentStatus = "unpublished" | "published" | "published-draft";
 // Spec §20.2 weather status
 type WeatherStatus = "Missing" | "Up to date" | "Up to date · Manual changes" | "Outdated" | "Update failed";
+
+let scoringRecalcActive = false;
 
 const REFRESH_SPOT_DELAY_MS = 900;
 const EXCEL_MAX_ROWS = 5000;
@@ -322,13 +324,93 @@ function monthlyScoreForSpot(row: any, rankingMode?: string | null): number | nu
   return resolveMonthlyScore(row, rankingMode);
 }
 
-function applyPublicSeasonLabels(monthly: any[], rankingMode?: string | null): any[] {
+function applyPublicSeasonLabels(monthly: any[], rankingMode: string | null | undefined, config: Pick<ScoringConfig, "seasonPeakThreshold" | "seasonSideThreshold">): any[] {
   const scores = monthly.map((row) => monthlyScoreForSpot(row, rankingMode));
   const bestScore = bestEvaluableScore(scores);
   return monthly.map((m, idx) => ({
     ...m,
-    seasonLabel: deriveSeasonLabelFromScore(scores[idx], bestScore),
+    seasonLabel: deriveSeasonLabelFromScore(scores[idx], bestScore, config),
   }));
+}
+
+async function recalculateScoresForAllSpots(config: ScoringConfig, commitPublishedConfig: boolean): Promise<number> {
+  if (scoringRecalcActive) throw new Error("score recalculation already running");
+  scoringRecalcActive = true;
+  try {
+    const rows = await storage.listAllMonthly(false);
+    const spotRows = await storage.listSpots(false);
+    const rankingModeBySpotId = new Map(spotRows.map(spot => [spot.id, spot.rankingMode]));
+    const rowsBySpot = new Map<number, typeof rows>();
+    for (const row of rows) {
+      const existing = rowsBySpot.get(row.spotId) ?? [];
+      existing.push(row);
+      rowsBySpot.set(row.spotId, existing);
+    }
+
+    await storage.setScoringStatus({
+      status: "Recalculating scores",
+      totalSpots: spotRows.length,
+      completedSpots: 0,
+      message: spotRows.length ? `0 / ${spotRows.length} spots recalculated` : "No spots to recalculate",
+      dismissible: false,
+      dismissed: false,
+    });
+
+    let updated = 0;
+    let completed = 0;
+    const batchSize = 10;
+    for (let offset = 0; offset < spotRows.length; offset += batchSize) {
+      const batch = spotRows.slice(offset, offset + batchSize);
+      for (const spot of batch) {
+        const rankingMode = rankingModeBySpotId.get(spot.id);
+        const spotMonthly = rowsBySpot.get(spot.id) ?? [];
+        const scores = spotMonthly.map((row) => rankingMode === "auto" ? calculateAutoMonthlyScore(row, config) : resolveMonthlyScore(row, rankingMode));
+        const bestScore = bestEvaluableScore(scores);
+        for (let i = 0; i < spotMonthly.length; i++) {
+          const row = spotMonthly[i];
+          const score = scores[i];
+          const seasonLabel = deriveSeasonLabelFromScore(score, bestScore, config);
+          await storage.updateMonthly(row.id, {
+            ...(rankingMode === "auto" ? { automaticWindScore: score } : {}),
+            seasonLabel,
+          } as any);
+          updated++;
+        }
+        completed++;
+        await storage.setScoringStatus({
+          status: "Recalculating scores",
+          totalSpots: spotRows.length,
+          completedSpots: completed,
+          message: `${completed} / ${spotRows.length} spots recalculated`,
+          dismissible: false,
+          dismissed: false,
+        });
+      }
+    }
+
+    if (commitPublishedConfig) {
+      await storage.commitScoringDraft();
+    }
+    await storage.setScoringStatus({
+      status: "Scores published",
+      totalSpots: spotRows.length,
+      completedSpots: spotRows.length,
+      message: "Scores published",
+      dismissible: true,
+      dismissed: false,
+    });
+    return updated;
+  } catch (error) {
+    await storage.setScoringStatus({
+      status: "Failed",
+      message: error instanceof Error ? error.message : "Score recalculation failed",
+      dismissible: true,
+      dismissed: false,
+    });
+    throw error;
+  } finally {
+    scoringRecalcActive = false;
+  }
 }
 
 function sleep(ms: number): Promise<void> {
@@ -1229,6 +1311,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // Public spot list (published only). Supports month + tag filtering + sort by score.
   app.get("/api/spots", async (req, res) => {
     const admin = isAuthed(req) && req.query.preview === "1";
+    const scoring = await storage.getScoringContent();
+    const seasonConfig = scoring.published;
     const spots = (await storage.listSpots(!admin)).map(s => serializeSpot(s, admin));
     const monthly = (await storage.listAllMonthly(!admin)).map(m => serializeMonthly(m, admin));
     const query = ((req.query.q as string) || "").trim().toLowerCase();
@@ -1253,13 +1337,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     let rows: any[] = spots.map(s => {
       const rankingMode = s.rankingMode;
       const spotMonthly = monthly.filter(m => m.spotId === s.id);
-      const publicMonthly = admin ? spotMonthly : applyPublicSeasonLabels(spotMonthly, rankingMode);
+      const publicMonthly = admin ? spotMonthly : applyPublicSeasonLabels(spotMonthly, rankingMode, seasonConfig);
       const selectedMonthly = months.length ? spotMonthly.filter(m => monthSet.has(m.month)) : [];
       const monthsAvail = spotMonthly.map(m => m.month);
       const scoreSource = months.length ? selectedMonthly : spotMonthly;
       const scores = scoreSource
         .map(record => monthlyScoreForSpot(record, rankingMode))
         .filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+      const bestScore = bestEvaluableScore(scores);
       const score = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
       const rec = (months.length ? selectedMonthly : spotMonthly)
         .slice()
@@ -1270,7 +1355,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const bySeason = new Map(publicMonthly.map(m => [m.month, m.seasonLabel]));
       const seasonByMonth = MONTH_ORDER.map(mn => bySeason.get(mn) ?? null);
       const publicRec = rec ? publicMonthly.find(m => m.month === rec.month) : null;
-      const monthRecord = rec ? { ...rec, seasonLabel: publicRec?.seasonLabel ?? "off" } : null;
+      const monthRecord = rec ? { ...rec, seasonLabel: publicRec?.seasonLabel ?? deriveSeasonLabelFromScore(monthlyScoreForSpot(rec, rankingMode), bestScore, seasonConfig) } : null;
       const searchHaystack = [s.name, s.country, s.region, s.slug, s.destinationSummary, s.teaserText]
         .filter(Boolean)
         .join(" ")
@@ -1331,6 +1416,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // Public single spot by slug with its monthly records.
   app.get("/api/spots/slug/:slug", async (req, res) => {
     const admin = isAuthed(req) && req.query.preview === "1";
+    const scoring = await storage.getScoringContent();
+    const seasonConfig = scoring.published;
     const requestedSlug = String(req.params.slug);
     let spot = await storage.getSpotBySlug(requestedSlug);
     if (!admin) {
@@ -1345,7 +1432,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!spot || (!spot.published && !admin)) return res.status(404).json({ error: "not found" });
     const serializedSpot = serializeSpot(spot, admin);
     const monthly = (await storage.listMonthly(spot.id, !admin)).map(m => serializeMonthly(m, admin));
-    const publicMonthly = admin ? monthly : applyPublicSeasonLabels(monthly, serializedSpot.rankingMode);
+    const publicMonthly = admin ? monthly : applyPublicSeasonLabels(monthly, serializedSpot.rankingMode, seasonConfig);
     const schools = (await storage.listSchoolsForSpot(spot.id, !admin)).map(s => serializeLinked(s, admin));
     const stays = (await storage.listStaysForSpot(spot.id, !admin)).map(s => serializeLinked(s, admin));
     res.json({ ...serializedSpot, monthly: publicMonthly, schools, stays });
@@ -1386,6 +1473,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       methodologyDescription: seo.methodologyDescriptionPublished,
       updatedAt: seo.updatedAt,
     });
+  });
+
+  app.get("/api/scoring", async (_req, res) => {
+    const scoring = await storage.getScoringContent();
+    res.json(scoring.published);
   });
 
   /* ══════════════ ADMIN (auth required) ══════════════ */
@@ -1556,27 +1648,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(serializeSpot(updated!, true));
   });
   app.post("/api/admin/scores/recalculate", requireAuth, async (_req, res) => {
-    const rows = await storage.listAllMonthly(false);
-    const spotRows = await storage.listSpots(false);
-    const rankingModeBySpotId = new Map(spotRows.map(spot => [spot.id, spot.rankingMode]));
-    const bestScoreBySpotId = new Map<number, number | null>();
-    for (const spot of spotRows) {
-      const rankingMode = rankingModeBySpotId.get(spot.id);
-      const spotMonthly = rows.filter((row) => row.spotId === spot.id);
-      const scores = spotMonthly.map((row) => rankingMode === "auto" ? calculateAutoMonthlyScore(row) : resolveMonthlyScore(row, rankingMode));
-      bestScoreBySpotId.set(spot.id, bestEvaluableScore(scores));
-    }
-    let updated = 0;
-    for (const row of rows) {
-      const rankingMode = rankingModeBySpotId.get(row.spotId);
-      const score = rankingMode === "auto" ? calculateAutoMonthlyScore(row) : resolveMonthlyScore(row, rankingMode);
-      const bestScore = bestScoreBySpotId.get(row.spotId) ?? null;
-      await storage.updateMonthly(row.id, {
-        ...(rankingMode === "auto" ? { automaticWindScore: score } : {}),
-        seasonLabel: deriveSeasonLabelFromScore(score, bestScore),
-      } as any);
-      updated++;
-    }
+    if (scoringRecalcActive) return res.status(409).json({ error: "score recalculation is already running" });
+    const scoring = await storage.getScoringContent();
+    const updated = await recalculateScoresForAllSpots(scoring.published, false);
     res.json({ updated });
   });
   app.delete("/api/admin/monthly/:id", requireAuth, async (req, res) => {
@@ -1587,6 +1661,34 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/admin/usage/open-meteo", requireAuth, async (_req, res) => {
     const { getOpenMeteoStats } = await import("./services/openMeteo");
     res.json(getOpenMeteoStats());
+  });
+
+  app.get("/api/admin/scoring", requireAuth, async (_req, res) => {
+    res.json(await storage.getScoringContent());
+  });
+
+  app.patch("/api/admin/scoring", requireAuth, async (req, res) => {
+    const next = { ...req.body } as ScoringConfig;
+    const scoring = await storage.saveScoringDraft(next);
+    res.json(scoring);
+  });
+
+  app.get("/api/admin/scoring/status", requireAuth, async (_req, res) => {
+    res.json(await storage.getScoringStatus());
+  });
+
+  app.post("/api/admin/scoring/dismiss", requireAuth, async (_req, res) => {
+    res.json(await storage.dismissScoringStatus());
+  });
+
+  app.post("/api/admin/scoring/publish", requireAuth, async (req, res) => {
+    if (scoringRecalcActive) return res.status(409).json({ error: "score recalculation is already running" });
+    const next = { ...req.body } as ScoringConfig;
+    const scoring = await storage.saveScoringDraft(next);
+    void recalculateScoresForAllSpots(scoring.draft, true).catch((error) => {
+      void logError("Scoring Publish", `Score recalculation failed: ${error instanceof Error ? error.message : String(error)}`, null);
+    });
+    res.json({ ok: true });
   });
 
   // ── Global listing admin: Schools ──
