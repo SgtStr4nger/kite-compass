@@ -39,6 +39,7 @@ const EXCEL_ACTIVE_STATUSES = new Set(["Uploading", "Validating", "Ready for con
 const EXCEL_TERMINAL_STATUSES = new Set(["Completed", "Failed", "Cancelled"]);
 const SPOT_TYPES = new Set(["flat-water", "chop", "waves", "lagoon", "foil", "freestyle"]);
 const RIDER_LEVELS = new Set(["beginner", "intermediate", "advanced"]);
+const DEPLOY_SHELL_PATH = "/bin/bash";
 const DEPLOY_SCRIPT_PATH = "/home/malte/kite-compass/deploy.sh";
 const DEPLOY_TIMEOUT_MS = 10 * 60 * 1000;
 const VIBE_TAGS = new Set(["city", "town", "village", "remote", "touristy", "local-scene", "family-friendly", "nightlife"]);
@@ -536,8 +537,8 @@ function isAuthed(req: Request): boolean {
 function runDeployScript(): Promise<DeployScriptResult> {
   return new Promise((resolve) => {
     execFile(
-      DEPLOY_SCRIPT_PATH,
-      [],
+      DEPLOY_SHELL_PATH,
+      [DEPLOY_SCRIPT_PATH],
       {
         timeout: DEPLOY_TIMEOUT_MS,
         maxBuffer: 10 * 1024 * 1024,
