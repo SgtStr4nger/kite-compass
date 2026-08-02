@@ -1,4 +1,4 @@
-import { users, spots, monthlyRecords, filterDefs, schools, stays, sitePages, legalPages, seoSettings, scoringSettings, scoringRecalcState, spotSchools, spotStays } from '@shared/schema';
+import { users, spots, monthlyRecords, filterDefs, schools, stays, sitePages, legalPages, seoSettings, scoringSettings, scoringRecalcState, weatherRefreshState, spotSchools, spotStays } from '@shared/schema';
 import type {
   User, InsertUser, Spot, InsertSpot, MonthlyRecord, InsertMonthly,
   School, InsertSchool, Stay, InsertStay,
@@ -268,6 +268,16 @@ sqlite.exec(`
     dismissed INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT
   );
+  CREATE TABLE IF NOT EXISTS weather_refresh_state (
+    id INTEGER PRIMARY KEY CHECK(id = 1),
+    status TEXT NOT NULL DEFAULT 'Idle',
+    total_spots INTEGER NOT NULL DEFAULT 0,
+    completed_spots INTEGER NOT NULL DEFAULT 0,
+    message TEXT NOT NULL DEFAULT '',
+    dismissible INTEGER NOT NULL DEFAULT 0,
+    dismissed INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT
+  );
   CREATE TABLE IF NOT EXISTS redirects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     from_path TEXT NOT NULL UNIQUE,
@@ -483,21 +493,35 @@ function parseScoringConfig(raw: string | null | undefined): ScoringConfig {
 }
 
 function ensureDefaultScoringSettings() {
-  const row = db.select().from(scoringSettings).get();
-  if (row) return;
   const timestamp = now();
-  const seed = JSON.stringify(DEFAULT_SCORING_CONFIG);
-  db.insert(scoringSettings).values({
-    id: 1,
-    draftJson: seed,
-    publishedJson: seed,
-    hasDraft: false,
-    publishedAt: timestamp,
-    updatedAt: timestamp,
-  } as any).run();
+  const row = db.select().from(scoringSettings).get();
+  if (!row) {
+    const seed = JSON.stringify(DEFAULT_SCORING_CONFIG);
+    db.insert(scoringSettings).values({
+      id: 1,
+      draftJson: seed,
+      publishedJson: seed,
+      hasDraft: false,
+      publishedAt: timestamp,
+      updatedAt: timestamp,
+    } as any).run();
+  }
   const stateRow = db.select().from(scoringRecalcState).get();
   if (!stateRow) {
     db.insert(scoringRecalcState).values({
+      id: 1,
+      status: "Idle",
+      totalSpots: 0,
+      completedSpots: 0,
+      message: "",
+      dismissible: false,
+      dismissed: false,
+      updatedAt: timestamp,
+    } as any).run();
+  }
+  const weatherStateRow = db.select().from(weatherRefreshState).get();
+  if (!weatherStateRow) {
+    db.insert(weatherRefreshState).values({
       id: 1,
       status: "Idle",
       totalSpots: 0,
@@ -668,6 +692,18 @@ export interface ScoringStatus {
   visible: boolean;
 }
 
+export interface WeatherRefreshStatus {
+  status: "Idle" | "Refreshing weather data" | "Weather refresh completed" | "Weather refresh failed";
+  totalSpots: number;
+  completedSpots: number;
+  message: string;
+  dismissible: boolean;
+  dismissed: boolean;
+  updatedAt: string | null;
+  active: boolean;
+  visible: boolean;
+}
+
 export type AdminRole = "main" | "standard";
 export interface CreateAdminUserInput {
   email: string;
@@ -819,6 +855,9 @@ export interface IStorage {
   getScoringStatus(): Promise<ScoringStatus>;
   setScoringStatus(next: Partial<Omit<ScoringStatus, "active" | "visible">> & { status: ScoringStatus["status"] }): Promise<ScoringStatus>;
   dismissScoringStatus(): Promise<ScoringStatus>;
+  getWeatherRefreshStatus(): Promise<WeatherRefreshStatus>;
+  setWeatherRefreshStatus(next: Partial<Omit<WeatherRefreshStatus, "active" | "visible">> & { status: WeatherRefreshStatus["status"] }): Promise<WeatherRefreshStatus>;
+  dismissWeatherRefreshStatus(): Promise<WeatherRefreshStatus>;
   // trash (soft delete)
   listTrash(): Promise<TrashItem[]>;
   getRestoreInfo(category: TrashCategory, id: number): Promise<RestoreInfo | undefined>;
@@ -1372,6 +1411,48 @@ export class DatabaseStorage implements IStorage {
     if (!row) throw new Error("scoring state not initialized");
     db.update(scoringRecalcState).set({ dismissed: true, updatedAt: now() } as any).where(eq(scoringRecalcState.id, row.id)).run();
     return this.getScoringStatus();
+  }
+
+  async getWeatherRefreshStatus(): Promise<WeatherRefreshStatus> {
+    const row = db.select().from(weatherRefreshState).get();
+    if (!row) throw new Error("weather refresh state not initialized");
+    const status = (row.status as WeatherRefreshStatus["status"]) || "Idle";
+    const dismissed = !!row.dismissed;
+    const active = status === "Refreshing weather data";
+    const visible = active || (!dismissed && status !== "Idle");
+    return {
+      status,
+      totalSpots: row.totalSpots ?? 0,
+      completedSpots: row.completedSpots ?? 0,
+      message: row.message ?? "",
+      dismissible: !!row.dismissible,
+      dismissed,
+      updatedAt: row.updatedAt ?? null,
+      active,
+      visible,
+    };
+  }
+
+  async setWeatherRefreshStatus(next: Partial<Omit<WeatherRefreshStatus, "active" | "visible">> & { status: WeatherRefreshStatus["status"] }): Promise<WeatherRefreshStatus> {
+    const row = db.select().from(weatherRefreshState).get();
+    if (!row) throw new Error("weather refresh state not initialized");
+    db.update(weatherRefreshState).set({
+      status: next.status,
+      totalSpots: next.totalSpots ?? row.totalSpots ?? 0,
+      completedSpots: next.completedSpots ?? row.completedSpots ?? 0,
+      message: next.message ?? row.message ?? "",
+      dismissible: next.dismissible ?? row.dismissible ?? false,
+      dismissed: next.dismissed ?? row.dismissed ?? false,
+      updatedAt: now(),
+    } as any).where(eq(weatherRefreshState.id, row.id)).run();
+    return this.getWeatherRefreshStatus();
+  }
+
+  async dismissWeatherRefreshStatus(): Promise<WeatherRefreshStatus> {
+    const row = db.select().from(weatherRefreshState).get();
+    if (!row) throw new Error("weather refresh state not initialized");
+    db.update(weatherRefreshState).set({ dismissed: true, updatedAt: now() } as any).where(eq(weatherRefreshState.id, row.id)).run();
+    return this.getWeatherRefreshStatus();
   }
 
   async listTrash(): Promise<TrashItem[]> {

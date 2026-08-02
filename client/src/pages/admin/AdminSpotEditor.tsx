@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import { queryClient } from "@/lib/queryClient";
 import { AdminLayout } from "./AdminLayout";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -117,7 +118,31 @@ export default function AdminSpotEditor() {
     await queryClient.invalidateQueries({ queryKey: [`/api/admin/spots/${sid}`] });
     await queryClient.invalidateQueries({ queryKey: ["/api/admin/spots"] });
     setForm(f => ({ ...f, published: true, hasDraft: false }));
-    toast({ title: "Spot published" });
+    toast({ title: "Spot content published" });
+  };
+
+  const publishSpotWeather = async () => {
+    const sid = await saveSpot();
+    if (!sid) return;
+    const out = await api<{ publishedCount: number }>("POST", `/api/admin/spots/${sid}/publish-weather`);
+    await queryClient.invalidateQueries({ queryKey: [`/api/admin/spots/${sid}`] });
+    await queryClient.invalidateQueries({ queryKey: ["/api/admin/spots"] });
+    const fresh = await api<SpotDetail>("GET", `/api/admin/spots/${sid}`);
+    const { monthly: m, schools: sc, stays: st, ...rest } = fresh;
+    setForm(rest); setMonthly(m); setSchools(sc ?? []); setStays(st ?? []);
+    toast({ title: `Spot weather published (${out.publishedCount} monthly rows)` });
+  };
+
+  const publishSpotContentAndWeather = async () => {
+    const sid = await saveSpot();
+    if (!sid) return;
+    const out = await api<{ publishedCount: number }>("POST", `/api/admin/spots/${sid}/publish-content-weather`);
+    await queryClient.invalidateQueries({ queryKey: [`/api/admin/spots/${sid}`] });
+    await queryClient.invalidateQueries({ queryKey: ["/api/admin/spots"] });
+    const fresh = await api<SpotDetail>("GET", `/api/admin/spots/${sid}`);
+    const { monthly: m, schools: sc, stays: st, ...rest } = fresh;
+    setForm(rest); setMonthly(m); setSchools(sc ?? []); setStays(st ?? []);
+    toast({ title: `Spot content + weather published (${out.publishedCount} monthly rows)` });
   };
 
   const deleteSpot = async () => {
@@ -211,8 +236,7 @@ export default function AdminSpotEditor() {
   };
   const publishAllMonths = async () => {
     if (!savedId) return;
-    await saveSpot();
-    const out = await api<{ publishedCount: number }>("POST", `/api/admin/spots/${savedId}/monthly/publish`);
+    const out = await api<{ publishedCount: number }>("POST", `/api/admin/spots/${savedId}/publish-weather`);
     await queryClient.invalidateQueries({ queryKey: [`/api/admin/spots/${savedId}`] });
     const fresh = await api<SpotDetail>("GET", `/api/admin/spots/${savedId}`);
     const { monthly: m, schools: sc, stays: st, ...rest } = fresh;
@@ -247,7 +271,21 @@ export default function AdminSpotEditor() {
           <Button variant="outline" onClick={exportSpot} disabled={busy} className="gap-2" data-testid="button-export-spot"><Upload className="h-4 w-4" /> Export</Button>
           <Button variant="outline" onClick={preview} disabled={busy || !form.name} className="gap-2" data-testid="button-preview"><Eye className="h-4 w-4" /> Preview</Button>
           <Button variant="outline" onClick={saveSpot} disabled={busy} className="gap-2" data-testid="button-save-draft"><Save className="h-4 w-4" /> Save draft</Button>
-          <Button onClick={publishSpot} disabled={busy} data-testid="button-publish-spot">Publish spot</Button>
+          <div className="inline-flex">
+            <Button onClick={publishSpot} disabled={busy} className="rounded-r-none" data-testid="button-publish-spot-content">Publish content</Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" disabled={busy} className="rounded-l-none border-l-0 px-2" data-testid="button-publish-spot-menu">
+                  <ChevronDown className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => void publishSpot()}>Publish content</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => void publishSpotWeather()}>Publish weather data</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => void publishSpotContentAndWeather()}>Publish content + weather</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
       </div>
 

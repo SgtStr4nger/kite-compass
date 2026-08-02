@@ -295,6 +295,18 @@ export const scoringRecalcState = sqliteTable("scoring_recalc_state", {
 });
 export type ScoringRecalcState = typeof scoringRecalcState.$inferSelect;
 
+export const weatherRefreshState = sqliteTable("weather_refresh_state", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  status: text("status").notNull().default("Idle"),
+  totalSpots: integer("total_spots").notNull().default(0),
+  completedSpots: integer("completed_spots").notNull().default(0),
+  message: text("message").notNull().default(""),
+  dismissible: integer("dismissible", { mode: "boolean" }).default(false),
+  dismissed: integer("dismissed", { mode: "boolean" }).default(false),
+  updatedAt: text("updated_at"),
+});
+export type WeatherRefreshState = typeof weatherRefreshState.$inferSelect;
+
 /* ─────────────── Redirects (spec §29) ─────────────── */
 export const redirects = sqliteTable("redirects", {
   id: integer("id").primaryKey({ autoIncrement: true }),
