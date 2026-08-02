@@ -31,7 +31,7 @@ function SeasonHelp() {
             {(["peak", "side", "off"] as const).map((key) => (
               <div key={key} className="flex items-start gap-2">
                 <span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-sm ${SEASON_META[key].dot}`} />
-                <div>
+                <div className="lg:flex lg:flex-col lg:h-[calc(100vh-33rem)] xl:h-[calc(100vh-35.5rem)]">
                   <span className="font-medium text-foreground">{SEASON_META[key].label}</span>
                   <span className="text-muted-foreground">
                     {key === "peak" ? " — at least 80 % of peak score" : key === "side" ? " — at least 50 %" : " — below 50 %"}
@@ -121,8 +121,8 @@ export default function Results() {
 
   return (
     <SiteLayout>
-      <div className="mx-auto max-w-7xl px-5 py-8 md:px-8">
-        <div className="mb-6">
+      <div className="mx-auto max-w-7xl px-5 py-8 md:px-8 lg:flex lg:h-[calc(100vh-4rem)] lg:flex-col lg:overflow-hidden">
+        <div className="mb-6 shrink-0">
           <h1 className="font-serif text-3xl font-semibold text-foreground">
             {filters.query
               ? `Results for ${filters.query}`
@@ -135,8 +135,8 @@ export default function Results() {
           </p>
         </div>
 
-        <div className="mb-8 hidden lg:block">
-          <div className="h-[420px] overflow-hidden rounded-2xl border border-card-border xl:h-[460px]">
+        <div className="mb-8 hidden shrink-0 lg:block" data-testid="explore-map-band">
+          <div className="h-[320px] overflow-hidden rounded-2xl border border-card-border xl:h-[360px]">
             <SpotMap
               points={points}
               selectedId={selectedId}
@@ -148,7 +148,10 @@ export default function Results() {
 
         <div className="grid gap-8 lg:grid-cols-[minmax(18rem,1fr)_minmax(0,2fr)]">
           <aside className="hidden lg:block">
-            <div className="sticky top-24 rounded-2xl border border-card-border bg-card p-5">
+            <div
+              className="overflow-y-auto rounded-2xl border border-card-border bg-card p-5 lg:h-[calc(100vh-33rem)] xl:h-[calc(100vh-35.5rem)]"
+              data-testid="explore-filter-rail"
+            >
               <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-foreground">
                 <SlidersHorizontal className="h-4 w-4" /> Filters
               </div>
@@ -156,7 +159,7 @@ export default function Results() {
             </div>
           </aside>
 
-          <div>
+          <div className="lg:h-[calc(100vh-33rem)] xl:h-[calc(100vh-35.5rem)]">
             <div className="mb-4 flex items-center gap-2 lg:hidden">
               <Sheet>
                 <SheetTrigger asChild>
@@ -187,15 +190,18 @@ export default function Results() {
               </div>
             </div>
 
-            <div className={`space-y-4 ${mobileView === "map" ? "hidden lg:block" : ""}`}>
-              <div className="flex items-center justify-between gap-4 border-b border-border/60 pb-3">
+            <div
+              className={`space-y-4 lg:flex lg:h-full lg:flex-col lg:overflow-y-auto lg:pr-1 ${mobileView === "map" ? "hidden lg:flex" : ""}`}
+              data-testid="explore-results-scroll"
+            >
+              <div className="flex items-center justify-between gap-4 border-b border-border/60 pb-3 lg:sticky lg:top-0 lg:z-10 lg:bg-background lg:pt-1">
                 <p className="text-sm font-medium text-foreground" data-testid="text-result-count">
                   {resultCountLabel}
                 </p>
                 <SeasonHelp />
               </div>
 
-              <div className="space-y-3">
+              <div className="space-y-3 lg:pb-2">
                 {isLoading ? (
                   Array.from({ length: 5 }).map((_, index) => (
                     <Skeleton key={index} className="h-36 w-full rounded-2xl" />
