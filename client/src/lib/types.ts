@@ -159,6 +159,18 @@ export interface ScoringStatus {
   visible: boolean;
 }
 
+export interface WeatherRefreshStatus {
+  status: "Idle" | "Refreshing weather data" | "Weather refresh completed" | "Weather refresh failed";
+  totalSpots: number;
+  completedSpots: number;
+  message: string;
+  dismissible: boolean;
+  dismissed: boolean;
+  updatedAt: string | null;
+  active: boolean;
+  visible: boolean;
+}
+
 export interface AdminUser {
   id: number;
   email: string;

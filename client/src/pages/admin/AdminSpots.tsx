@@ -4,10 +4,11 @@ import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
 import { AdminLayout } from "./AdminLayout";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AdminSpotListItem, ExcelImportAction, ExcelImportHistoryItem, ExcelImportPreviewResponse } from "@/lib/types";
-import { Plus, Search, Circle, CheckCircle2, PencilLine, BadgeInfo } from "lucide-react";
+import { Plus, Search, Circle, CheckCircle2, PencilLine, BadgeInfo, ChevronDown, Download, SendHorizontal } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 
@@ -39,6 +40,8 @@ export default function AdminSpots() {
   const [, navigate] = useLocation();
   const [q, setQ] = useState("");
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [sortBy, setSortBy] = useState<"name" | "updatedAt">("updatedAt");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [preview, setPreview] = useState<ExcelImportPreviewResponse | null>(null);
   const [importBusy, setImportBusy] = useState(false);
   const [history, setHistory] = useState<ExcelImportHistoryItem[]>([]);
@@ -46,9 +49,18 @@ export default function AdminSpots() {
 
   useEffect(() => { if (!token) navigate("/admin"); }, [token, navigate]);
   const { data: spots, isLoading, refetch } = useQuery<AdminSpotListItem[]>({ queryKey: ["/api/admin/spots"], enabled: !!token });
-  const filtered = useMemo(() => (spots ?? []).filter(s => s.name.toLowerCase().includes(q.toLowerCase()) || (s.country || "").toLowerCase().includes(q.toLowerCase())), [spots, q]);
+  const filtered = useMemo(() => {
+    const base = (spots ?? []).filter(s => s.name.toLowerCase().includes(q.toLowerCase()) || (s.country || "").toLowerCase().includes(q.toLowerCase()));
+    return base.sort((a, b) => {
+      let cmp = 0;
+      if (sortBy === "name") cmp = a.name.localeCompare(b.name);
+      else cmp = (a.updatedAt || "").localeCompare(b.updatedAt || "");
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+  }, [spots, q, sortBy, sortDir]);
   const filteredIds = filtered.map(s => s.id);
   const allFilteredSelected = filteredIds.length > 0 && filteredIds.every(id => selectedIds.includes(id));
+  const filtersActive = q.trim().length > 0;
 
   const loadHistory = async () => setHistory(await api<ExcelImportHistoryItem[]>("GET", "/api/admin/excel/import/spots/history"));
   useEffect(() => { if (token) void loadHistory(); }, [token]);
@@ -69,6 +81,36 @@ export default function AdminSpots() {
       downloadBase64(out.fileName, out.fileBase64);
     } catch (e: any) {
       toast({ title: "Export failed", description: String(e.message || e), variant: "destructive" });
+    }
+  };
+
+  const exportPrimaryScope: "all" | "filtered" | "selected" =
+    selectedIds.length > 0 ? "selected" : (filtersActive ? "filtered" : "all");
+  const exportPrimaryLabel =
+    exportPrimaryScope === "selected" ? "Export selected"
+      : exportPrimaryScope === "filtered" ? "Export filtered"
+        : "Export all";
+
+  const publishBulk = async (mode: "content" | "weather" | "content-weather") => {
+    const targetIds = selectedIds.length ? selectedIds : filteredIds;
+    if (!targetIds.length) {
+      toast({ title: "No spots to publish", description: "Selection/filter returned no rows.", variant: "destructive" });
+      return;
+    }
+    try {
+      const out = await api<{ targetSpots: number; contentPublished: number; weatherPublished: number; recalculatedRows: number }>(
+        "POST",
+        "/api/admin/spots/publish-bulk",
+        { mode, spotIds: targetIds },
+      );
+      const modeLabel = mode === "content" ? "Content" : mode === "weather" ? "Weather" : "Content + weather";
+      toast({
+        title: `${modeLabel} publish finished`,
+        description: `${out.targetSpots} spots, ${out.contentPublished} content updates, ${out.weatherPublished} weather rows, ${out.recalculatedRows} score rows recalculated`,
+      });
+      await refetch();
+    } catch (e: any) {
+      toast({ title: "Bulk publish failed", description: String(e.message || e), variant: "destructive" });
     }
   };
 
@@ -125,10 +167,44 @@ export default function AdminSpots() {
 
       <div className="mb-4 rounded-xl border border-border p-3">
         <div className="mb-2 flex flex-wrap gap-2">
-          <Button size="sm" variant="outline" disabled={!selectedIds.length} onClick={() => exportRows("selected")}>Export selected</Button>
-          <Button size="sm" variant="outline" disabled={!filtered.length} onClick={() => exportRows("filtered")}>Export filtered</Button>
-          <Button size="sm" variant="outline" onClick={() => exportRows("all")}>Export all</Button>
-          <Button size="sm" variant="outline" onClick={() => exportRows("template")}>Template</Button>
+          <div className="inline-flex">
+            <Button size="sm" variant="outline" onClick={() => exportRows(exportPrimaryScope)} className="rounded-r-none">
+              <Download className="mr-2 h-4 w-4" />
+              {exportPrimaryLabel}
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="outline" className="rounded-l-none border-l-0 px-2">
+                  <ChevronDown className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                {selectedIds.length > 0 && <DropdownMenuItem onClick={() => exportRows("selected")}>Export selected</DropdownMenuItem>}
+                {filtersActive && <DropdownMenuItem onClick={() => exportRows("filtered")}>Export filtered</DropdownMenuItem>}
+                <DropdownMenuItem onClick={() => exportRows("all")}>Export all</DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => exportRows("template")}>Template</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+          <div className="inline-flex">
+            <Button size="sm" onClick={() => void publishBulk("content")} className="rounded-r-none">
+              <SendHorizontal className="mr-2 h-4 w-4" />
+              Publish content
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="outline" className="rounded-l-none border-l-0 px-2">
+                  <ChevronDown className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                <DropdownMenuItem onClick={() => void publishBulk("content")}>Publish content</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => void publishBulk("weather")}>Publish weather data</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => void publishBulk("content-weather")}>Publish content + weather</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
           <Input type="file" accept=".xlsx" className="max-w-xs" disabled={importBusy} onChange={e => void onUpload(e.target.files?.[0] ?? null)} />
         </div>
         {preview && (
@@ -160,27 +236,53 @@ export default function AdminSpots() {
             <thead className="bg-secondary/60 text-left text-xs uppercase tracking-wide text-muted-foreground">
               <tr>
                 <th className="px-2 py-3"><input type="checkbox" checked={allFilteredSelected} onChange={(e) => setSelectedIds(e.target.checked ? Array.from(new Set([...selectedIds, ...filteredIds])) : selectedIds.filter(id => !filteredIds.includes(id)))} /></th>
-                <th className="px-4 py-3 font-medium">Name</th>
+                <th className="px-4 py-3 font-medium">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (sortBy === "name") setSortDir(sortDir === "asc" ? "desc" : "asc");
+                      else { setSortBy("name"); setSortDir("asc"); }
+                    }}
+                    className="inline-flex items-center gap-1"
+                  >
+                    Name
+                    {sortBy === "name" ? (sortDir === "asc" ? "▲" : "▼") : null}
+                  </button>
+                </th>
                 <th className="px-4 py-3 font-medium">Country</th>
                 <th className="px-4 py-3 text-center font-medium">Months</th>
                 <th className="px-4 py-3 font-medium">Status</th>
                 <th className="px-4 py-3 font-medium">Data</th>
+                <th className="px-4 py-3 font-medium">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (sortBy === "updatedAt") setSortDir(sortDir === "asc" ? "desc" : "asc");
+                      else { setSortBy("updatedAt"); setSortDir("desc"); }
+                    }}
+                    className="inline-flex items-center gap-1"
+                  >
+                    Last updated
+                    {sortBy === "updatedAt" ? (sortDir === "asc" ? "▲" : "▼") : null}
+                  </button>
+                </th>
               </tr>
             </thead>
             <tbody>
               {filtered.map(s => (
                 <tr key={s.id} className="cursor-pointer border-t border-border hover-elevate" onClick={() => navigate(`/admin/spots/${s.id}`)} data-testid={`row-admin-spot-${s.slug}`}>
                   <td className="px-2 py-3" onClick={(e) => e.stopPropagation()}>
-                    <input type="checkbox" checked={selectedIds.includes(s.id)} onChange={(e) => setSelectedIds(prev => e.target.checked ? [...prev, s.id] : prev.filter(id => id !== s.id))} />
+                    <input type="checkbox" checked={selectedIds.includes(s.id)} onChange={(e) => setSelectedIds(prev => e.target.checked ? Array.from(new Set([...prev, s.id])) : prev.filter(id => id !== s.id))} />
                   </td>
                   <td className="px-4 py-3 font-medium text-foreground">{s.name}</td>
                   <td className="px-4 py-3 text-muted-foreground">{s.country || "—"}</td>
                   <td className="px-4 py-3 text-center tabular-nums text-muted-foreground">{s.monthlyCount}</td>
                   <td className="px-4 py-3"><StatusPill published={s.published} hasDraft={s.hasDraft} /></td>
                   <td className="px-4 py-3"><DataPill status={s.dataStatus as any} /></td>
+                  <td className="px-4 py-3 text-muted-foreground">{s.updatedAt ? new Date(s.updatedAt).toLocaleString() : "—"}</td>
                 </tr>
               ))}
-              {filtered.length === 0 && <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">No spots found.</td></tr>}
+              {filtered.length === 0 && <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">No spots found.</td></tr>}
             </tbody>
           </table>
         </div>

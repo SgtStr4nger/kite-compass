@@ -3,10 +3,10 @@ import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { CompassMark } from "@/components/Logo";
 import { Button } from "@/components/ui/button";
-import { LogOut, LayoutGrid, Database, FileText, ExternalLink, School, Hotel, Users, Search, Trash2, ArrowRightLeft, AlertCircle } from "lucide-react";
+import { LogOut, LayoutGrid, Database, FileText, ExternalLink, School, Hotel, Users, Search, Trash2, ArrowRightLeft, AlertCircle, CloudSun } from "lucide-react";
 import { applyRobotsMetadata } from "@/lib/metadata";
 import { api } from "@/lib/api";
-import { ExcelImportStatus, ScoringStatus } from "@/lib/types";
+import { ExcelImportStatus, ScoringStatus, WeatherRefreshStatus } from "@/lib/types";
 import { Sparkles } from "lucide-react";
 
 export function AdminLayout({ children }: { children: ReactNode }) {
@@ -15,6 +15,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
   const [location] = useLocation();
   const [excelStatus, setExcelStatus] = useState<ExcelImportStatus | null>(null);
   const [scoringStatus, setScoringStatus] = useState<ScoringStatus | null>(null);
+  const [weatherStatus, setWeatherStatus] = useState<WeatherRefreshStatus | null>(null);
   const [openErrorCount, setOpenErrorCount] = useState(0);
 
   useEffect(() => {
@@ -46,6 +47,33 @@ export function AdminLayout({ children }: { children: ReactNode }) {
         else scheduleNext(5000);
       } catch {
         if (alive) { setExcelStatus(null); scheduleNext(15_000); }
+      }
+    };
+
+    void poll();
+    return () => { alive = false; if (timerId !== null) window.clearTimeout(timerId); };
+  }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+    let alive = true;
+    let timerId: number | null = null;
+
+    const scheduleNext = (intervalMs: number) => {
+      if (!alive) return;
+      timerId = window.setTimeout(() => { void poll(); }, intervalMs);
+    };
+
+    const poll = async () => {
+      try {
+        const status = await api<WeatherRefreshStatus>("GET", "/api/admin/weather-refresh/status");
+        if (!alive) return;
+        setWeatherStatus(status);
+        if (status.active) scheduleNext(2000);
+        else if (!status.visible) scheduleNext(30_000);
+        else scheduleNext(5000);
+      } catch {
+        if (alive) scheduleNext(15_000);
       }
     };
 
@@ -116,6 +144,12 @@ export function AdminLayout({ children }: { children: ReactNode }) {
     try {
       await api("POST", "/api/admin/scoring/dismiss");
       setScoringStatus(prev => prev ? { ...prev, dismissed: true, visible: false, active: false } : prev);
+    } catch {}
+  };
+  const dismissWeatherBanner = async () => {
+    try {
+      await api("POST", "/api/admin/weather-refresh/dismiss");
+      setWeatherStatus(prev => prev ? { ...prev, dismissed: true, visible: false, active: false } : prev);
     } catch {}
   };
   const openImportCategory = () => {
@@ -225,6 +259,22 @@ export function AdminLayout({ children }: { children: ReactNode }) {
               </div>
               {!scoringStatus.active && scoringStatus.dismissible && (
                 <Button size="sm" variant="outline" onClick={dismissScoringBanner}>Dismiss</Button>
+              )}
+            </div>
+          </div>
+        )}
+        {weatherStatus?.visible && (
+          <div className={`border-b px-5 py-3 text-sm md:px-8 ${weatherStatus.active ? "border-amber-300 bg-amber-50 text-amber-900" : "border-emerald-300 bg-emerald-50 text-emerald-900"}`}>
+            <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold ${weatherStatus.active ? "bg-amber-100 text-amber-900" : "bg-emerald-100 text-emerald-900"}`}>
+                  <CloudSun className="h-3.5 w-3.5" />
+                  {weatherStatus.status}
+                </span>
+                <span className="font-medium">{weatherStatus.message || " "}</span>
+              </div>
+              {!weatherStatus.active && weatherStatus.dismissible && (
+                <Button size="sm" variant="outline" onClick={dismissWeatherBanner}>Dismiss</Button>
               )}
             </div>
           </div>

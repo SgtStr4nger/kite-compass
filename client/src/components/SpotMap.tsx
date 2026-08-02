@@ -16,50 +16,33 @@ export interface MapPoint {
 /** Score tier → background color (spec §6.3) */
 function scoreTierColor(score: number | null, active: boolean): string {
   if (active) return "#b7791f"; // gold for selected
-  if (score == null) return "#6b7280"; // gray – no score
+  if (score == null) return "#2d8290"; // turquoise – no score
   if (score >= 8) return "#15803d";   // green – very good
   if (score >= 6) return "#174a4f";   // teal – good
   if (score >= 4) return "#d97706";   // amber – medium
   return "#dc2626";                   // red – low
 }
 
-/** Cluster marker: three stacked pins, count in the front one */
+/** Cluster marker: single clean pin with aggregated spot count (integer) */
 function clusterIcon(count: number): L.DivIcon {
-  const front = 32;
-  const rear = 24;
-  const width = 52;
-  const height = 44;
-  const frontLeft = (width - front) / 2;
-  const frontColor = "#174a4f";
-  const rearColor = "#2d8290";
-
-  const rearPin = (side: "left" | "right") =>
-    `<div style="position:absolute;bottom:10px;${side}:0;z-index:1;">
-      <div style="width:${rear}px;height:${rear}px;position:relative;">
-        <div style="position:absolute;inset:0;background:${rearColor};border:2px solid rgba(255,255,255,.7);border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 2px 5px rgba(0,0,0,.28);"></div>
-      </div>
-    </div>`;
-
+  const size = 38;
+  const label = String(Math.max(1, Math.trunc(count)));
+  const bg = "#174a4f";
   return L.divIcon({
     className: "kc-cluster",
-    html: `<div style="position:relative;width:${width}px;height:${height}px;">
-      ${rearPin("left")}
-      ${rearPin("right")}
-      <div style="position:absolute;bottom:0;left:${frontLeft}px;z-index:2;">
-        <div style="width:${front}px;height:${front}px;position:relative;">
-          <div style="position:absolute;inset:0;background:${frontColor};border:2.5px solid #fff;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 0 0 2.5px rgba(255,255,255,.45),0 3px 8px rgba(0,0,0,.4);"></div>
-          <span style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;font-family:Inter,sans-serif;">${count}</span>
-        </div>
+    html: `<div style="width:${size}px;height:${size}px;display:flex;align-items:center;justify-content:center;">
+      <div style="position:relative;width:${size}px;height:${size}px;background:${bg};border:2.5px solid #fff;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 0 0 2px rgba(255,255,255,.35),0 2px 6px rgba(0,0,0,.3);">
+        <span style="position:absolute;inset:0;transform:rotate(45deg);display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;font-weight:700;font-family:Inter,sans-serif;">${label}</span>
       </div>
     </div>`,
-    iconSize: [width, height],
-    iconAnchor: [width / 2, height],
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size],
   });
 }
 
 function pinIcon(active: boolean, score: number | null) {
   const bg = scoreTierColor(score, active);
-  const label = score != null ? Number(score).toFixed(1) : "–";
+  const label = score != null ? Number(score).toFixed(1) : "•";
   const size = active ? 42 : 34;
   const ring = active ? `box-shadow:0 0 0 3px rgba(255,255,255,.7),0 2px 8px rgba(0,0,0,.4);` : `box-shadow:0 2px 6px rgba(0,0,0,.35);`;
   const scale = active ? `transform:rotate(-45deg) scale(1.15);` : `transform:rotate(-45deg);`;

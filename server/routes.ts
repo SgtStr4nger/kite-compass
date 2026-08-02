@@ -28,6 +28,9 @@ type WeatherStatus = "Missing" | "Up to date" | "Up to date · Manual changes" |
 let scoringRecalcActive = false;
 
 const REFRESH_SPOT_DELAY_MS = 900;
+const OPEN_METEO_MAX_REQUESTS_PER_MINUTE = 50;
+const ESTIMATED_REQUESTS_PER_SPOT_REFRESH = 2;
+const OPEN_METEO_WINDOW_MS = 60_000;
 const EXCEL_MAX_ROWS = 5000;
 const EXCEL_RETENTION_DAYS = 30;
 const EXCEL_ACTIVE_STATUSES = new Set(["Uploading", "Validating", "Ready for confirmation", "Importing", "Rolling back"]);
@@ -347,6 +350,82 @@ async function recalculateScoresForAllSpots(config: ScoringConfig, commitPublish
       rowsBySpot.set(row.spotId, existing);
     }
 
+    async function recalculateScoresForSpotIds(config: ScoringConfig, spotIds: number[], progressMessage = "spots recalculated"): Promise<number> {
+      if (scoringRecalcActive) throw new Error("score recalculation already running");
+      const targetIds = Array.from(new Set(spotIds.filter((id) => Number.isFinite(id) && id > 0)));
+      if (!targetIds.length) return 0;
+      scoringRecalcActive = true;
+      try {
+        const rows = await storage.listAllMonthly(false);
+        const spotRows = (await storage.listSpots(false)).filter((spot) => targetIds.includes(spot.id));
+        const rankingModeBySpotId = new Map(spotRows.map((spot) => [spot.id, spot.rankingMode]));
+        const rowsBySpot = new Map<number, typeof rows>();
+        for (const row of rows) {
+          if (!targetIds.includes(row.spotId)) continue;
+          const existing = rowsBySpot.get(row.spotId) ?? [];
+          existing.push(row);
+          rowsBySpot.set(row.spotId, existing);
+        }
+
+        await storage.setScoringStatus({
+          status: "Recalculating scores",
+          totalSpots: spotRows.length,
+          completedSpots: 0,
+          message: spotRows.length ? `0 / ${spotRows.length} ${progressMessage}` : "No spots to recalculate",
+          dismissible: false,
+          dismissed: false,
+        });
+
+        let updated = 0;
+        let completed = 0;
+        for (const spot of spotRows) {
+          const rankingMode = rankingModeBySpotId.get(spot.id);
+          const spotMonthly = rowsBySpot.get(spot.id) ?? [];
+          const scores = spotMonthly.map((row) => rankingMode === "auto" ? calculateAutoMonthlyScore(row, config) : resolveMonthlyScore(row, rankingMode));
+          const bestScore = bestEvaluableScore(scores);
+          for (let i = 0; i < spotMonthly.length; i++) {
+            const row = spotMonthly[i];
+            const score = scores[i];
+            const seasonLabel = deriveSeasonLabelFromScore(score, bestScore, config);
+            await storage.updateMonthly(row.id, {
+              ...(rankingMode === "auto" ? { automaticWindScore: score } : {}),
+              seasonLabel,
+            } as any);
+            updated++;
+          }
+          completed++;
+          await storage.setScoringStatus({
+            status: "Recalculating scores",
+            totalSpots: spotRows.length,
+            completedSpots: completed,
+            message: `${completed} / ${spotRows.length} ${progressMessage}`,
+            dismissible: false,
+            dismissed: false,
+          });
+        }
+
+        await storage.setScoringStatus({
+          status: "Scores published",
+          totalSpots: spotRows.length,
+          completedSpots: spotRows.length,
+          message: `Scores recalculated for ${spotRows.length} spots`,
+          dismissible: true,
+          dismissed: false,
+        });
+        return updated;
+      } catch (error) {
+        await storage.setScoringStatus({
+          status: "Failed",
+          message: error instanceof Error ? error.message : "Score recalculation failed",
+          dismissible: true,
+          dismissed: false,
+        });
+        throw error;
+      } finally {
+        scoringRecalcActive = false;
+      }
+    }
+
     await storage.setScoringStatus({
       status: "Recalculating scores",
       totalSpots: spotRows.length,
@@ -415,6 +494,31 @@ async function recalculateScoresForAllSpots(config: ScoringConfig, commitPublish
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+type WeatherActionScope = "all" | "missing" | "filtered" | "selected";
+type SpotPublishMode = "content" | "weather" | "content-weather";
+function parseWeatherScope(raw: unknown): WeatherActionScope {
+  if (raw === "all" || raw === "filtered" || raw === "selected" || raw === "missing") return raw;
+  return "missing";
+}
+function parseSpotPublishMode(raw: unknown): SpotPublishMode {
+  if (raw === "content" || raw === "weather" || raw === "content-weather") return raw;
+  return "content";
+}
+function parseSpotIds(raw: unknown): number[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map(v => Number(v))
+    .filter((v): v is number => Number.isFinite(v) && v > 0);
+}
+function isEligibleForWeatherRefresh(spot: Spot): boolean {
+  return !!spot.latitude && !!spot.longitude;
+}
+function scopeMatchesSpot(scope: WeatherActionScope, scopedIds: Set<number>, spot: Spot): boolean {
+  if (scope === "all") return true;
+  if (scope === "missing") return !spot.dataLastRefreshedAt;
+  return scopedIds.has(spot.id);
 }
 
 /* ───────── Auth helpers (no cookies/localStorage — Bearer token) ───────── */
@@ -1526,6 +1630,66 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(serializeSpot(s));
   });
 
+  app.post("/api/admin/spots/:id/publish-weather", requireAuth, async (req, res) => {
+    const spotId = Number(req.params.id);
+    const spot = await storage.getSpot(spotId);
+    if (!spot) return res.status(404).json({ error: "not found" });
+    const scoring = await storage.getScoringContent();
+    const recalculatedRows = await recalculateScoresForSpotIds(scoring.published, [spotId], "spots recalculated");
+    const publishedCount = await storage.publishAllMonthlyForSpot(spotId);
+    await storage.resetWeatherManualChanges(spotId);
+    const fresh = await storage.getSpot(spotId);
+    res.json({ spot: serializeSpot(fresh!, true), publishedCount, recalculatedRows });
+  });
+
+  app.post("/api/admin/spots/:id/publish-content-weather", requireAuth, async (req, res) => {
+    const spotId = Number(req.params.id);
+    const spot = await storage.getSpot(spotId);
+    if (!spot) return res.status(404).json({ error: "not found" });
+    const publishedSpot = await storage.publishSpot(spotId);
+    const scoring = await storage.getScoringContent();
+    const recalculatedRows = await recalculateScoresForSpotIds(scoring.published, [spotId], "spots recalculated");
+    const publishedCount = await storage.publishAllMonthlyForSpot(spotId);
+    await storage.resetWeatherManualChanges(spotId);
+    res.json({ spot: serializeSpot(publishedSpot!, true), publishedCount, recalculatedRows });
+  });
+
+  app.post("/api/admin/spots/publish-bulk", requireAuth, async (req, res) => {
+    const mode = parseSpotPublishMode(req.body?.mode);
+    const scopedIds = Array.from(new Set(parseSpotIds(req.body?.spotIds)));
+    if (!scopedIds.length) return res.status(400).json({ error: "spotIds required" });
+    const availableSpots = await storage.listSpots(false);
+    const targetSpots = availableSpots.filter((spot) => scopedIds.includes(spot.id));
+    if (!targetSpots.length) return res.status(404).json({ error: "no matching spots found" });
+
+    let contentPublished = 0;
+    let weatherPublished = 0;
+    let recalculatedRows = 0;
+
+    if (mode === "content" || mode === "content-weather") {
+      for (const spot of targetSpots) {
+        const out = await storage.publishSpot(spot.id);
+        if (out) contentPublished++;
+      }
+    }
+    if (mode === "weather" || mode === "content-weather") {
+      const scoring = await storage.getScoringContent();
+      recalculatedRows = await recalculateScoresForSpotIds(scoring.published, targetSpots.map((spot) => spot.id), "spots recalculated");
+      for (const spot of targetSpots) {
+        weatherPublished += await storage.publishAllMonthlyForSpot(spot.id);
+        await storage.resetWeatherManualChanges(spot.id);
+      }
+    }
+
+    res.json({
+      mode,
+      targetSpots: targetSpots.length,
+      contentPublished,
+      weatherPublished,
+      recalculatedRows,
+    });
+  });
+
   app.delete("/api/admin/spots/:id", requireAuth, async (req, res) => {
     await storage.deleteSpot(Number(req.params.id));
     res.json({ ok: true });
@@ -1555,18 +1719,53 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (weatherImportActive) return res.status(409).json({ error: "Weather import is already running" });
     weatherImportActive = true;
     try {
-      const scope = req.body?.scope === "all" ? "all" : "missing";
+      const scope = parseWeatherScope(req.body?.scope);
+      const scopedIds = new Set(parseSpotIds(req.body?.spotIds));
+      if ((scope === "selected" || scope === "filtered") && !scopedIds.size) {
+        return res.status(400).json({ error: "spotIds required for selected/filtered scope" });
+      }
       const spots = await storage.listSpots(false);
-      const eligible = spots.filter(spot => {
-        if (!spot.latitude || !spot.longitude) return false;
-        return scope === "all" ? true : !spot.dataLastRefreshedAt;
+      const scopedSpots = spots.filter(spot => scopeMatchesSpot(scope, scopedIds, spot));
+      const eligible = scopedSpots.filter(isEligibleForWeatherRefresh);
+      const missingCoords = scopedSpots.length - eligible.length;
+      const totalScoped = scopedSpots.length;
+      await storage.setWeatherRefreshStatus({
+        status: "Refreshing weather data",
+        totalSpots: eligible.length,
+        completedSpots: 0,
+        message: `Refreshing ${eligible.length} spot(s)`,
+        dismissible: false,
+        dismissed: false,
       });
+      if (!eligible.length) {
+        const message = totalScoped
+          ? "No selected spots have valid coordinates"
+          : "No spots matched this refresh scope";
+        await storage.setWeatherRefreshStatus({
+          status: "Weather refresh completed",
+          totalSpots: 0,
+          completedSpots: 0,
+          message,
+          dismissible: true,
+          dismissed: false,
+        });
+        return res.json({ scope, updated: 0, skipped: totalScoped, failed: 0, failures: [] });
+      }
 
       let updated = 0;
-      let skipped = spots.length - eligible.length;
+      let skipped = missingCoords;
       const failures: { id: number; slug: string; error: string }[] = [];
+      let windowStart = Date.now();
+      let estimatedRequestsInWindow = 0;
 
-      for (const spot of eligible) {
+      for (let i = 0; i < eligible.length; i++) {
+        const spot = eligible[i];
+        if (estimatedRequestsInWindow + ESTIMATED_REQUESTS_PER_SPOT_REFRESH > OPEN_METEO_MAX_REQUESTS_PER_MINUTE) {
+          const waitMs = OPEN_METEO_WINDOW_MS - (Date.now() - windowStart);
+          if (waitMs > 0) await sleep(waitMs);
+          windowStart = Date.now();
+          estimatedRequestsInWindow = 0;
+        }
         try {
           await enrichSpotById(spot.id);
           updated++;
@@ -1575,26 +1774,81 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           failures.push({ id: spot.id, slug: spot.slug, error: errMsg });
           void logError("Weather Enrichment", `Weather refresh failed for spot "${spot.name}": ${errMsg}`, `spot:${spot.id}`);
         } finally {
-          if (spot !== eligible[eligible.length - 1]) await sleep(REFRESH_SPOT_DELAY_MS);
+          estimatedRequestsInWindow += ESTIMATED_REQUESTS_PER_SPOT_REFRESH;
+          const completed = i + 1;
+          await storage.setWeatherRefreshStatus({
+            status: "Refreshing weather data",
+            totalSpots: eligible.length,
+            completedSpots: completed,
+            message: `Refreshing weather data (${completed}/${eligible.length})`,
+            dismissible: false,
+            dismissed: false,
+          });
+          if (i < eligible.length - 1) await sleep(REFRESH_SPOT_DELAY_MS);
         }
       }
 
       if (failures.length) skipped += failures.length;
+      await storage.setWeatherRefreshStatus({
+        status: failures.length ? "Weather refresh failed" : "Weather refresh completed",
+        totalSpots: eligible.length,
+        completedSpots: eligible.length,
+        message: failures.length
+          ? `Completed with ${failures.length} failed spot(s)`
+          : `Refreshed ${updated} spot(s)`,
+        dismissible: true,
+        dismissed: false,
+      });
       res.json({ scope, updated, skipped, failed: failures.length, failures });
+    } catch (error) {
+      await storage.setWeatherRefreshStatus({
+        status: "Weather refresh failed",
+        message: error instanceof Error ? error.message : "Weather refresh failed",
+        dismissible: true,
+        dismissed: false,
+      });
+      throw error;
     } finally {
       weatherImportActive = false;
     }
   });
 
-  app.post("/api/admin/data/publish", requireAuth, async (_req, res) => {
-    const rows = await storage.listAllMonthly(false);
+  app.post("/api/admin/data/publish", requireAuth, async (req, res) => {
+    const rawScope = req.body?.scope;
+    const scope = rawScope === "selected" || rawScope === "filtered" ? rawScope : "all";
+    const scopedIds = new Set(parseSpotIds(req.body?.spotIds));
+    if ((scope === "selected" || scope === "filtered") && !scopedIds.size) {
+      return res.status(400).json({ error: "spotIds required for selected/filtered scope" });
+    }
+    const rowsBeforeRecalc = await storage.listAllMonthly(false);
+    const scopedRowsBeforeRecalc = scope === "all" ? rowsBeforeRecalc : rowsBeforeRecalc.filter(row => scopedIds.has(row.spotId));
+    const targetSpotIds = scope === "all"
+      ? Array.from(new Set(scopedRowsBeforeRecalc.map((row) => row.spotId)))
+      : Array.from(scopedIds);
+    const spotsWithMonthlyRows = Array.from(new Set(scopedRowsBeforeRecalc.map((row) => row.spotId)));
+    let recalculatedRows = 0;
+    if (spotsWithMonthlyRows.length) {
+      const scoring = await storage.getScoringContent();
+      recalculatedRows = await recalculateScoresForSpotIds(scoring.published, spotsWithMonthlyRows, "spots recalculated");
+    }
+
+    const rowsAfterRecalc = await storage.listAllMonthly(false);
+    const scopedRows = scope === "all" ? rowsAfterRecalc : rowsAfterRecalc.filter(row => scopedIds.has(row.spotId));
+    const rowsToPublish = scopedRows.filter(row => !row.published || row.hasDraft);
+    const alreadyPublished = scopedRows.length - rowsToPublish.length;
+    const noMonthlyData = scope === "all"
+      ? 0
+      : targetSpotIds.filter(spotId => !scopedRows.some(row => row.spotId === spotId)).length;
     let published = 0;
-    for (const row of rows) {
-      if (row.published) continue;
+    for (const row of rowsToPublish) {
       const next = await storage.publishMonthly(row.id);
       if (next) published++;
     }
-    res.json({ published });
+    for (const spotId of spotsWithMonthlyRows) {
+      await storage.resetWeatherManualChanges(spotId);
+    }
+    const skipped = alreadyPublished + noMonthlyData;
+    res.json({ scope, published, skipped, alreadyPublished, noMonthlyData, scopedMonthlyRows: scopedRows.length, recalculatedRows });
   });
 
   app.get("/api/admin/data/refreshable-spots", requireAuth, async (_req, res) => {
@@ -1635,8 +1889,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
   app.post("/api/admin/spots/:id/monthly/publish", requireAuth, async (req, res) => {
     const spotId = Number(req.params.id);
+    const spot = await storage.getSpot(spotId);
+    if (!spot) return res.status(404).json({ error: "not found" });
+    const scoring = await storage.getScoringContent();
+    const recalculatedRows = await recalculateScoresForSpotIds(scoring.published, [spotId], "spots recalculated");
     const count = await storage.publishAllMonthlyForSpot(spotId);
-    res.json({ publishedCount: count });
+    await storage.resetWeatherManualChanges(spotId);
+    res.json({ publishedCount: count, recalculatedRows });
   });
   // Reset all manual weather changes for a spot (spec §19.4).
   app.post("/api/admin/spots/:id/weather/reset", requireAuth, async (req, res) => {
@@ -1647,11 +1906,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const updated = await storage.getSpot(spotId);
     res.json(serializeSpot(updated!, true));
   });
-  app.post("/api/admin/scores/recalculate", requireAuth, async (_req, res) => {
+  app.post("/api/admin/scores/recalculate", requireAuth, async (req, res) => {
     if (scoringRecalcActive) return res.status(409).json({ error: "score recalculation is already running" });
     const scoring = await storage.getScoringContent();
+    const spotIds = parseSpotIds(req.body?.spotIds);
+    if (spotIds.length) {
+      const updated = await recalculateScoresForSpotIds(scoring.published, spotIds, "spots recalculated");
+      return res.json({ updated, scoped: true, spots: spotIds.length });
+    }
     const updated = await recalculateScoresForAllSpots(scoring.published, false);
-    res.json({ updated });
+    res.json({ updated, scoped: false });
   });
   app.delete("/api/admin/monthly/:id", requireAuth, async (req, res) => {
     await storage.deleteMonthly(Number(req.params.id));
@@ -1679,6 +1943,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/admin/scoring/dismiss", requireAuth, async (_req, res) => {
     res.json(await storage.dismissScoringStatus());
+  });
+
+  app.get("/api/admin/weather-refresh/status", requireAuth, async (_req, res) => {
+    res.json(await storage.getWeatherRefreshStatus());
+  });
+
+  app.post("/api/admin/weather-refresh/dismiss", requireAuth, async (_req, res) => {
+    res.json(await storage.dismissWeatherRefreshStatus());
   });
 
   app.post("/api/admin/scoring/publish", requireAuth, async (req, res) => {
