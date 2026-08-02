@@ -23,6 +23,40 @@ function scoreTierColor(score: number | null, active: boolean): string {
   return "#dc2626";                   // red – low
 }
 
+/** Cluster marker: three stacked pins, count in the front one */
+function clusterIcon(count: number): L.DivIcon {
+  const front = 32;
+  const rear = 24;
+  const width = 52;
+  const height = 44;
+  const frontLeft = (width - front) / 2;
+  const frontColor = "#174a4f";
+  const rearColor = "#2d8290";
+
+  const rearPin = (side: "left" | "right") =>
+    `<div style="position:absolute;bottom:10px;${side}:0;z-index:1;">
+      <div style="width:${rear}px;height:${rear}px;position:relative;">
+        <div style="position:absolute;inset:0;background:${rearColor};border:2px solid rgba(255,255,255,.7);border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 2px 5px rgba(0,0,0,.28);"></div>
+      </div>
+    </div>`;
+
+  return L.divIcon({
+    className: "kc-cluster",
+    html: `<div style="position:relative;width:${width}px;height:${height}px;">
+      ${rearPin("left")}
+      ${rearPin("right")}
+      <div style="position:absolute;bottom:0;left:${frontLeft}px;z-index:2;">
+        <div style="width:${front}px;height:${front}px;position:relative;">
+          <div style="position:absolute;inset:0;background:${frontColor};border:2.5px solid #fff;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 0 0 2.5px rgba(255,255,255,.45),0 3px 8px rgba(0,0,0,.4);"></div>
+          <span style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;font-family:Inter,sans-serif;">${count}</span>
+        </div>
+      </div>
+    </div>`,
+    iconSize: [width, height],
+    iconAnchor: [width / 2, height],
+  });
+}
+
 function pinIcon(active: boolean, score: number | null) {
   const bg = scoreTierColor(score, active);
   const label = score != null ? Number(score).toFixed(1) : "–";
@@ -134,7 +168,12 @@ export function SpotMap({
           />
           <FitBounds points={valid} />
           <PanToSelected points={valid} selectedId={selectedId} />
-          <MarkerClusterGroup chunkedLoading>
+          <MarkerClusterGroup
+            chunkedLoading
+            showCoverageOnHover={false}
+            maxClusterRadius={50}
+            iconCreateFunction={(cluster: any) => clusterIcon(cluster.getChildCount())}
+          >
             {valid.map(p => (
               <Marker
                 key={p.id}
