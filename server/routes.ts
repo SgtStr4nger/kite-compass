@@ -8,7 +8,7 @@ import { db, storage, sqlite, logError } from "./storage";
 import type { ListingsFilter, SeoContent, TrashCategory, RedirectRow, AdminErrorStatus } from "./storage";
 import { enrichSpotById, MissingCoordinatesError } from "./services/enrichment";
 import { getContinentForCountry } from "@shared/locations";
-import { calculateAutoMonthlyScore, deriveSeasonLabelFromScore, resolveMonthlyScore } from "@shared/scoring";
+import { bestEvaluableScore, calculateAutoMonthlyScore, deriveSeasonLabelFromScore, resolveMonthlyScore } from "@shared/scoring";
 import { insertSpotSchema, insertMonthlySchema, monthlyRecords, schools, spots, stays, spotSchools, spotStays } from "@shared/schema";
 import type { Spot, MonthlyRecord, InsertMonthly, InsertSchool, InsertStay } from "@shared/schema";
 
@@ -323,9 +323,11 @@ function monthlyScoreForSpot(row: any, rankingMode?: string | null): number | nu
 }
 
 function applyPublicSeasonLabels(monthly: any[], rankingMode?: string | null): any[] {
-  return monthly.map(m => ({
+  const scores = monthly.map((row) => monthlyScoreForSpot(row, rankingMode));
+  const bestScore = bestEvaluableScore(scores);
+  return monthly.map((m, idx) => ({
     ...m,
-    seasonLabel: deriveSeasonLabelFromScore(monthlyScoreForSpot(m, rankingMode)),
+    seasonLabel: deriveSeasonLabelFromScore(scores[idx], bestScore),
   }));
 }
 
@@ -1268,7 +1270,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const bySeason = new Map(publicMonthly.map(m => [m.month, m.seasonLabel]));
       const seasonByMonth = MONTH_ORDER.map(mn => bySeason.get(mn) ?? null);
       const publicRec = rec ? publicMonthly.find(m => m.month === rec.month) : null;
-      const monthRecord = rec ? { ...rec, seasonLabel: publicRec?.seasonLabel ?? deriveSeasonLabelFromScore(monthlyScoreForSpot(rec, rankingMode)) } : null;
+      const monthRecord = rec ? { ...rec, seasonLabel: publicRec?.seasonLabel ?? "off" } : null;
       const searchHaystack = [s.name, s.country, s.region, s.slug, s.destinationSummary, s.teaserText]
         .filter(Boolean)
         .join(" ")
@@ -1557,14 +1559,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const rows = await storage.listAllMonthly(false);
     const spotRows = await storage.listSpots(false);
     const rankingModeBySpotId = new Map(spotRows.map(spot => [spot.id, spot.rankingMode]));
+    const bestScoreBySpotId = new Map<number, number | null>();
+    for (const spot of spotRows) {
+      const rankingMode = rankingModeBySpotId.get(spot.id);
+      const spotMonthly = rows.filter((row) => row.spotId === spot.id);
+      const scores = spotMonthly.map((row) => rankingMode === "auto" ? calculateAutoMonthlyScore(row) : resolveMonthlyScore(row, rankingMode));
+      bestScoreBySpotId.set(spot.id, bestEvaluableScore(scores));
+    }
     let updated = 0;
     for (const row of rows) {
       const rankingMode = rankingModeBySpotId.get(row.spotId);
-      if (rankingMode !== "auto") continue;
-      const score = calculateAutoMonthlyScore(row);
+      const score = rankingMode === "auto" ? calculateAutoMonthlyScore(row) : resolveMonthlyScore(row, rankingMode);
+      const bestScore = bestScoreBySpotId.get(row.spotId) ?? null;
       await storage.updateMonthly(row.id, {
-        automaticWindScore: score,
-        seasonLabel: deriveSeasonLabelFromScore(score),
+        ...(rankingMode === "auto" ? { automaticWindScore: score } : {}),
+        seasonLabel: deriveSeasonLabelFromScore(score, bestScore),
       } as any);
       updated++;
     }

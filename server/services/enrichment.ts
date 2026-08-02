@@ -23,7 +23,7 @@
 
 import { storage } from "../storage";
 import { enrichCoordinate, type EnrichmentResult } from "./openMeteo";
-import { calculateAutoMonthlyScore, deriveSeasonLabelFromScore } from "@shared/scoring";
+import { bestEvaluableScore, calculateAutoMonthlyScore, deriveSeasonLabelFromScore } from "@shared/scoring";
 
 export interface EnrichSpotOutcome {
   ok: boolean;
@@ -59,11 +59,13 @@ function hasCoords(lat: number | null, lng: number | null): boolean {
 async function applyResult(spotId: number, result: EnrichmentResult, spotPublished: boolean): Promise<number> {
   const existing = await storage.listMonthly(spotId, false); // include drafts
   const byMonth = new Map(existing.map(m => [m.month, m]));
+  const autoScoreByMonth = new Map(result.months.map((em) => [em.month, calculateAutoMonthlyScore(em)]));
+  const bestScore = bestEvaluableScore(Array.from(autoScoreByMonth.values()));
   let written = 0;
 
   for (const em of result.months) {
-    const automaticWindScore = calculateAutoMonthlyScore(em);
-    const seasonLabel = deriveSeasonLabelFromScore(automaticWindScore);
+    const automaticWindScore = autoScoreByMonth.get(em.month) ?? null;
+    const seasonLabel = deriveSeasonLabelFromScore(automaticWindScore, bestScore);
     const metrics = {
       avgKiteableWind10mKnots: em.avgKiteableWind10mKnots,
       kiteableDaysCount: em.kiteableDaysCount,

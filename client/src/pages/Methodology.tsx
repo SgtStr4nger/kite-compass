@@ -72,8 +72,8 @@ export default function Methodology() {
           <div className="mt-5 space-y-3">
             {[
               { label: "peak", text: "The best window of the year — most consistent wind and conditions." },
-              { label: "side", text: "Reliable and well worth a trip, though not the absolute peak." },
-              { label: "off", text: "Off season — wind is unreliable or the spot is best avoided." },
+              { label: "side", text: "Mid season — still good, but below each spot’s top window." },
+              { label: "off", text: "Off season — clearly below that spot’s stronger months, or not evaluable." },
             ].map(({ label, text }) => (
               <div key={label} className="flex items-start gap-3 rounded-xl border border-card-border bg-card p-4">
                 <SeasonBadge label={label} />

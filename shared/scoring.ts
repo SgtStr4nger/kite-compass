@@ -1,5 +1,9 @@
 export type RankingMode = "manual" | "auto";
 export type SeasonLabel = "peak" | "side" | "off";
+export const SEASON_THRESHOLD = {
+  peak: 0.8,
+  side: 0.5,
+} as const;
 
 export interface MonthlyScoreInput {
   month?: string | null;
@@ -162,9 +166,15 @@ export function resolveMonthlyScore(row: MonthlyScoreInput, rankingModeRaw?: str
   return stored != null ? stored : calculateAutoMonthlyScore(row);
 }
 
-export function deriveSeasonLabelFromScore(score: number | null): SeasonLabel {
-  if (score == null) return "side";
-  if (score >= 7.5) return "peak";
-  if (score >= 5) return "side";
+export function bestEvaluableScore(scores: Array<number | null | undefined>): number | null {
+  const evaluableScores = scores.filter((score): score is number => typeof score === "number" && Number.isFinite(score));
+  if (!evaluableScores.length) return null;
+  return Math.max(...evaluableScores);
+}
+
+export function deriveSeasonLabelFromScore(score: number | null, bestScore: number | null): SeasonLabel {
+  if (score == null || bestScore == null) return "off";
+  if (score >= bestScore * SEASON_THRESHOLD.peak) return "peak";
+  if (score >= bestScore * SEASON_THRESHOLD.side) return "side";
   return "off";
 }

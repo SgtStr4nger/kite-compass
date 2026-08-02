@@ -410,6 +410,7 @@ function WhenItWorksBest({
               const avgWind = r.avgKiteableWind10mKnots ?? r.averageBaseWind;
               const windyDays = r.kiteableDaysCount ?? r.windDays;
               const kiteHours = r.avgKiteableHoursPerDay;
+              const hasValidScore = score != null;
               const primaryWT = (r as any).primaryWindType as string | null ?? null;
               const secondaryWT = (r as any).secondaryWindType as string | null ?? null;
               const windTypeLabel = primaryWT
@@ -423,7 +424,7 @@ function WhenItWorksBest({
                 >
                   <td className={`sticky left-0 z-10 px-4 py-3 font-medium text-foreground ${on ? "border-l-2 border-primary bg-accent/10" : "bg-card"}`}>{m}</td>
                   <td className="px-4 py-3 text-right tabular-nums">{score != null ? score.toFixed(1) : "—"}</td>
-                  <td className="px-4 py-3"><SeasonBadge label={r.seasonLabel} /></td>
+                  <td className="px-4 py-3">{hasValidScore ? <SeasonBadge label={r.seasonLabel} /> : "—"}</td>
                   <td className="px-4 py-3 text-right tabular-nums">{windyDays != null ? (windyDays === 0 ? "0.0" : windyDays) : "—"}</td>
                   <td className="px-4 py-3 text-right tabular-nums">{kiteHours != null ? (kiteHours === 0 ? "0.0" : `${kiteHours} h`) : "—"}</td>
                   <td className="px-4 py-3 text-right tabular-nums">{avgWind != null ? (avgWind === 0 ? "0.0 kn" : `${avgWind} kn`) : "—"}</td>

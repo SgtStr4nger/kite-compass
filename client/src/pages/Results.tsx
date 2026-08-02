@@ -14,8 +14,11 @@ import { SpotListItem, FilterDef, SEASON_META, PublicSeoState } from "@/lib/type
 import { SlidersHorizontal, MapIcon, List, Compass, Info } from "lucide-react";
 import { applyPageMetadata } from "@/lib/metadata";
 import heroImg from "@/assets/hero.jpg";
+import { SEASON_THRESHOLD } from "@shared/scoring";
 
 function SeasonHelp() {
+  const peakPct = Math.round(SEASON_THRESHOLD.peak * 100);
+  const sidePct = Math.round(SEASON_THRESHOLD.side * 100);
   return (
     <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
       <span className="font-medium text-foreground">Season</span>
@@ -34,7 +37,11 @@ function SeasonHelp() {
                 <div className="lg:flex lg:flex-col lg:h-[calc(100vh-33rem)] xl:h-[calc(100vh-35.5rem)]">
                   <span className="font-medium text-foreground">{SEASON_META[key].label}</span>
                   <span className="text-muted-foreground">
-                    {key === "peak" ? " — at least 80 % of peak score" : key === "side" ? " — at least 50 %" : " — below 50 %"}
+                    {key === "peak"
+                      ? ` — at least ${peakPct}% of this spot's best month score`
+                      : key === "side"
+                        ? ` — at least ${sidePct}% and below ${peakPct}%`
+                        : ` — below ${sidePct}% (or no valid score)`}
                   </span>
                 </div>
               </div>

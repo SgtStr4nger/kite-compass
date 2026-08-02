@@ -7,7 +7,7 @@ export interface MonthlyRecord {
   averageBaseWind: number | null;
   gusts: number | null;
   windDays: number | null;
-  seasonLabel: string; // peak|good|okay|off
+  seasonLabel: string; // peak|side|off
   // Open-Meteo enriched metrics (wind in knots, waves in metres, period in seconds)
   avgKiteableWind10mKnots: number | null;
   kiteableDaysCount: number | null;
@@ -323,7 +323,7 @@ export const MONTHS = [
 
 export const SEASON_META: Record<string, { label: string; color: string; dot: string }> = {
   peak: { label: "Peak", color: "text-emerald-900 bg-emerald-100", dot: "bg-emerald-600" },
-  side: { label: "Side", color: "text-sky-900 bg-sky-100", dot: "bg-sky-500" },
+  side: { label: "Mid", color: "text-amber-900 bg-amber-100", dot: "bg-amber-500" },
   off: { label: "Off", color: "text-stone-700 bg-stone-200", dot: "bg-stone-400" },
 };
 
