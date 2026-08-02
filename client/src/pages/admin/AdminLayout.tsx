@@ -3,20 +3,27 @@ import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { CompassMark } from "@/components/Logo";
 import { Button } from "@/components/ui/button";
-import { LogOut, LayoutGrid, Database, FileText, ExternalLink, School, Hotel, Users, Search, Trash2, ArrowRightLeft, AlertCircle, CloudSun } from "lucide-react";
+import { LogOut, LayoutGrid, Database, FileText, ExternalLink, School, Hotel, Users, Search, Trash2, ArrowRightLeft, AlertCircle, CloudSun, Rocket, RefreshCw } from "lucide-react";
 import { applyRobotsMetadata } from "@/lib/metadata";
 import { api } from "@/lib/api";
 import { ExcelImportStatus, ScoringStatus, WeatherRefreshStatus } from "@/lib/types";
+import { useToast } from "@/hooks/use-toast";
 import { Sparkles } from "lucide-react";
 
+type DeployResponse =
+  | { ok: true; stdout: string; stderr?: string }
+  | { ok: false; error: string; stdout?: string; stderr?: string };
+
 export function AdminLayout({ children }: { children: ReactNode }) {
-  const { email, logout, mustChangePassword, token } = useAuth();
+  const { email, logout, mustChangePassword, token, role } = useAuth();
   const [, navigate] = useLocation();
   const [location] = useLocation();
   const [excelStatus, setExcelStatus] = useState<ExcelImportStatus | null>(null);
   const [scoringStatus, setScoringStatus] = useState<ScoringStatus | null>(null);
   const [weatherStatus, setWeatherStatus] = useState<WeatherRefreshStatus | null>(null);
   const [openErrorCount, setOpenErrorCount] = useState(0);
+  const [deploying, setDeploying] = useState(false);
+  const { toast } = useToast();
 
   useEffect(() => {
     if (mustChangePassword && location !== "/admin/change-password") navigate("/admin/change-password");
@@ -158,6 +165,46 @@ export function AdminLayout({ children }: { children: ReactNode }) {
     else if (excelStatus.category === "schools") navigate("/admin/listings/schools");
     else if (excelStatus.category === "stays") navigate("/admin/listings/stays");
   };
+  const handleDeploy = async () => {
+    if (role !== "main" || !token) return;
+    if (!window.confirm("Trigger deployment of the latest main branch on the server?")) return;
+
+    setDeploying(true);
+    try {
+      const res = await fetch("/api/admin/deploy", {
+        method: "POST",
+        cache: "no-store",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const payload = await res.json() as DeployResponse;
+
+      if (res.ok && payload.ok) {
+        const lastLine = payload.stdout.split(/\r?\n/).filter(Boolean).at(-1) ?? "Deployment complete.";
+        toast({ title: "Deployment triggered", description: lastLine });
+        return;
+      }
+
+      const description = [
+        payload.ok ? res.statusText : payload.error,
+        payload.stderr,
+      ].filter(Boolean).join(" \u2014 ");
+      toast({
+        title: "Deployment failed",
+        description: description || "The deploy endpoint returned an error.",
+        variant: "destructive",
+      });
+    } catch (e: any) {
+      toast({
+        title: "Deployment failed",
+        description: String(e.message || e),
+        variant: "destructive",
+      });
+    } finally {
+      setDeploying(false);
+    }
+  };
 
   const navLink = (href: string, icon: React.ReactNode, label: string, testId: string) => {
     const active = location === href || location.startsWith(href + "/");
@@ -194,6 +241,20 @@ export function AdminLayout({ children }: { children: ReactNode }) {
             {navLink("/admin/legal", <FileText className="h-4 w-4" />, "Legal", "link-admin-legal")}
             {navLink("/admin/redirects", <ArrowRightLeft className="h-4 w-4" />, "Redirects", "link-admin-redirects")}
             {navLink("/admin/users", <Users className="h-4 w-4" />, "Users", "link-admin-users")}
+            {role === "main" ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="w-full justify-start gap-2 rounded-lg px-3 py-2 text-sm font-medium text-sidebar-foreground/90 hover:bg-sidebar-accent"
+                onClick={() => { void handleDeploy(); }}
+                disabled={deploying}
+                data-testid="button-deploy-latest-main"
+              >
+                {deploying ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
+                Deploy latest main
+              </Button>
+            ) : null}
             {navLink("/admin/trash", <Trash2 className="h-4 w-4" />, "Trash", "link-admin-trash")}
             <Link href="/admin/errors"
               className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium no-underline transition-colors ${location === "/admin/errors" ? "bg-sidebar-accent text-sidebar-foreground" : "text-sidebar-foreground/90 hover:bg-sidebar-accent"}`}

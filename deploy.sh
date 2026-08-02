@@ -3,7 +3,7 @@ set -e
 
 cd /home/malte/kite-compass
 
-echo "[deploy] Pulling latest main..."
+echo "[deploy] Pulling latest main via SSH..."
 git pull origin main
 
 echo "[deploy] Installing dependencies..."
