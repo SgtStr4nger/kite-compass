@@ -23,20 +23,24 @@ function scoreTierColor(score: number | null, active: boolean): string {
   return "#dc2626";                   // red – low
 }
 
-/** Cluster marker: single clean pin with aggregated spot count (integer) */
+/** Cluster marker: concentric pulse circles with aggregated spot count (integer) */
 function clusterIcon(count: number): L.DivIcon {
-  const size = 38;
+  const size = 58;
   const label = String(Math.max(1, Math.trunc(count)));
   const bg = "#174a4f";
+  const core = 24;
+  const mid = 38;
+  const ring = (diameter: number, opacity: number, content: string) =>
+    `position:absolute;left:50%;top:50%;width:${diameter}px;height:${diameter}px;transform:translate(-50%,-50%);border-radius:50%;background:${bg};opacity:${opacity};${content}`;
   return L.divIcon({
     className: "kc-cluster",
-    html: `<div style="width:${size}px;height:${size}px;display:flex;align-items:center;justify-content:center;">
-      <div style="position:relative;width:${size}px;height:${size}px;background:${bg};border:2.5px solid #fff;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 0 0 2px rgba(255,255,255,.35),0 2px 6px rgba(0,0,0,.3);">
-        <span style="position:absolute;inset:0;transform:rotate(45deg);display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;font-weight:700;font-family:Inter,sans-serif;">${label}</span>
-      </div>
+    html: `<div style="width:${size}px;height:${size}px;position:relative;display:flex;align-items:center;justify-content:center;">
+      <div style="${ring(size, 0.12, "")}"></div>
+      <div style="${ring(mid, 0.3, "")}"></div>
+      <div style="${ring(core, 1, "border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.3);display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;font-family:Inter,sans-serif;")}">${label}</div>
     </div>`,
     iconSize: [size, size],
-    iconAnchor: [size / 2, size],
+    iconAnchor: [size / 2, size / 2],
   });
 }
 

@@ -14,12 +14,6 @@ export function SiteHeader() {
           <Link href="/methodology" className="rounded-md px-3 py-2 font-medium text-foreground/80 hover-elevate no-underline" data-testid="link-nav-methodology">
             Methodology
           </Link>
-          <Link href="/privacy-policy" className="rounded-md px-3 py-2 font-medium text-foreground/80 hover-elevate no-underline" data-testid="link-nav-privacy-policy">
-            Privacy Policy
-          </Link>
-          <Link href="/legal-notice" className="rounded-md px-3 py-2 font-medium text-foreground/80 hover-elevate no-underline" data-testid="link-nav-legal-notice">
-            Legal Notice
-          </Link>
         </nav>
       </div>
     </header>
