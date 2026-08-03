@@ -63,11 +63,9 @@ export const spots = sqliteTable("spots", {
   nearestAirportCode: text("nearest_airport_code").default(""),
   airportTransferTime: text("airport_transfer_time").default(""),
   transportNote: text("transport_note").default(""),
-  beginnerFriendly: integer("beginner_friendly", { mode: "boolean" }).default(false),
   spotTypes: text("spot_types").default("[]"),      // JSON array
   riderLevels: text("rider_levels").default("[]"),  // JSON array
   vibeTags: text("vibe_tags").default("[]"),        // JSON array
-  waterStates: text("water_states").default("[]"),  // JSON array: Flat|Choppy|Wave|Mixed
   internalNotes: text("internal_notes").default(""),
   sourceNotes: text("source_notes").default(""),
   seoTitleOverride: text("seo_title_override").default(""),

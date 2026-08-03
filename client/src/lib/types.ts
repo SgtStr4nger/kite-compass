@@ -208,11 +208,9 @@ export interface Spot {
   nearestAirportCode: string;
   airportTransferTime: string;
   transportNote: string;
-  beginnerFriendly: boolean;
   spotTypes: string[];
   riderLevels: string[];
   vibeTags: string[];
-  waterStates: string[];
   internalNotes: string;
   sourceNotes: string;
   seoTitleOverride: string;

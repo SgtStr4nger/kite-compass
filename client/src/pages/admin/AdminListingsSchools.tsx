@@ -40,7 +40,7 @@ function parseUrlState(search: string) {
 
 function downloadBase64(fileName: string, base64: string) {
   const link = document.createElement("a");
-  link.href = `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${base64}`;
+  link.href = `data:application/json;base64,${base64}`;
   link.download = fileName;
   link.click();
 }
@@ -152,7 +152,7 @@ export default function AdminListingsSchools() {
     toast({ title: "Published" });
   };
 
-  const exportRows = async (scope: "selected" | "filtered" | "all" | "template") => {
+  const exportRows = async (scope: "selected" | "filtered" | "all") => {
     const filters = {
       search: state.q || undefined,
       published: state.published || undefined,
@@ -256,15 +256,14 @@ export default function AdminListingsSchools() {
           <Button size="sm" variant="outline" disabled={!selectedIds.length} onClick={() => void exportRows("selected")}>Export selected</Button>
           <Button size="sm" variant="outline" onClick={() => void exportRows("filtered")}>Export filtered</Button>
           <Button size="sm" variant="outline" onClick={() => void exportRows("all")}>Export all</Button>
-          <Button size="sm" variant="outline" onClick={() => void exportRows("template")}>Template</Button>
-          <Input type="file" accept=".xlsx" className="max-w-xs" disabled={importBusy} onChange={(e) => void onUpload(e.target.files?.[0] ?? null)} />
+          <Input type="file" accept=".json" className="max-w-xs" disabled={importBusy} onChange={(e) => void onUpload(e.target.files?.[0] ?? null)} />
         </div>
         {preview && (
           <div className="rounded border p-3 text-sm">
             New {preview.summary.newCount} · Update {preview.summary.updateCount} · Error ID not found {preview.summary.errorIdNotFoundCount} · Error invalid data {preview.summary.errorInvalidDataCount}
             <div className="mt-2 flex flex-wrap gap-2">
-              <Button size="sm" variant="outline" onClick={() => downloadBase64(preview.files.updatesFileName, preview.files.updatesFileBase64)}>updates.xlsx</Button>
-              <Button size="sm" variant="outline" onClick={() => downloadBase64(preview.files.errorsFileName, preview.files.errorsFileBase64)}>errors.xlsx</Button>
+              <Button size="sm" variant="outline" onClick={() => downloadBase64(preview.files.updatesFileName, preview.files.updatesFileBase64)}>{preview.files.updatesFileName}</Button>
+              <Button size="sm" variant="outline" onClick={() => downloadBase64(preview.files.errorsFileName, preview.files.errorsFileBase64)}>{preview.files.errorsFileName}</Button>
               <Button size="sm" onClick={() => void commitImport("create_update")}>Create new & update existing</Button>
               <Button size="sm" variant="outline" onClick={() => void commitImport("create_only")}>Create new only</Button>
               <Button size="sm" variant="ghost" onClick={() => void cancelImport()}>Cancel import</Button>

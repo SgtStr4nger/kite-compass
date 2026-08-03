@@ -4,7 +4,6 @@ import type { Server } from 'node:http';
 import crypto from 'node:crypto';
 import { execFile, type ExecFileException } from 'node:child_process';
 import { and, eq } from "drizzle-orm";
-import * as XLSX from "xlsx";
 import { db, storage, sqlite, logError } from "./storage";
 import { log } from "./log";
 import type { ListingsFilter, SeoContent, TrashCategory, RedirectRow, AdminErrorStatus } from "./storage";
@@ -37,37 +36,109 @@ const EXCEL_MAX_ROWS = 5000;
 const EXCEL_RETENTION_DAYS = 30;
 const EXCEL_ACTIVE_STATUSES = new Set(["Uploading", "Validating", "Ready for confirmation", "Importing", "Rolling back"]);
 const EXCEL_TERMINAL_STATUSES = new Set(["Completed", "Failed", "Cancelled"]);
+const SPOTS_JSON_SCHEMA_VERSION = 1;
+const SPOTS_JSON_SCOPES = new Set(["all", "filtered", "selected"]);
+const SCHOOLS_STAYS_JSON_SCOPES = new Set(["all", "filtered", "selected"]);
 const SPOT_TYPES = new Set(["flat-water", "chop", "waves", "lagoon", "foil", "freestyle"]);
 const RIDER_LEVELS = new Set(["beginner", "intermediate", "advanced"]);
 const DEPLOY_SCRIPT_PATH = "/home/malte/kite-compass/deploy.sh";
 const DEPLOY_TIMEOUT_MS = 10 * 60 * 1000;
 const VIBE_TAGS = new Set(["city", "town", "village", "remote", "touristy", "local-scene", "family-friendly", "nightlife"]);
-const WATER_STATES = new Set(["Flat", "Choppy", "Wave", "Mixed"]);
 const SCHOOL_SPORTS = new Set(["Kitesurfing", "Wingfoiling", "Kitefoiling", "Surfing"]);
 const STAY_TYPES = new Set(["Hotel", "Hostel", "Apartment", "Guesthouse", "Resort"]);
-const XLSX_COLUMNS = {
-  spots: [
-    "internal_id", "name", "country_code", "latitude", "longitude", "weather_latitude", "weather_longitude",
-    "onshore_direction_degrees", "spot_description", "kite_conditions_description", "warning_text", "rider_levels",
-    "water_states", "destination_type", "destination_vibes",
-  ],
-  schools: [
-    "internal_id", "name", "sports", "lessons", "rental", "website_url", "google_maps_url", "short_description", "published", "spot_ids",
-  ],
-  stays: [
-    "internal_id", "name", "type", "website_url", "google_maps_url", "short_description", "published", "spot_ids",
-  ],
-} as const;
-const XLSX_SHEETS = { spots: "Spots", schools: "Kite Schools", stays: "Stays" } as const;
-type ExcelCategory = keyof typeof XLSX_COLUMNS;
+type ExcelCategory = "spots" | "schools" | "stays";
 type ExcelImportAction = "create_update" | "create_only";
 type ImportRowKind = "new" | "update" | "error_id_not_found" | "error_invalid_data";
+type SpotJsonScope = "all" | "filtered" | "selected";
+type SchoolsStaysJsonScope = "all" | "filtered" | "selected";
+type CanonicalSpotImport = {
+  slug: string;
+  name: string;
+  country: string;
+  region: string;
+  latitude: number | null;
+  longitude: number | null;
+  heroImageUrl: string;
+  teaserText: string;
+  destinationSummary: string;
+  destinationDescription: string;
+  kiteContextDescription: string;
+  spotTypes: string[];
+  riderLevels: string[];
+  vibeTags: string[];
+  nearestAirportName: string;
+  nearestAirportCode: string;
+  airportTransferTime: string;
+  transportNote: string;
+  googleMapsUrl: string;
+  windyUrl: string;
+  windfinderUrl: string;
+  internalNotes: string;
+  sourceNotes: string;
+  seoTitleOverride: string;
+  seoDescriptionOverride: string;
+  rankingMode: "manual" | "auto";
+};
+type SpotJsonMatch = { publicId?: string; id?: number; slug?: string };
+type SpotsCentralJsonItem = { match?: SpotJsonMatch; spot: CanonicalSpotImport };
+type SpotsCentralJsonPayload = {
+  schemaVersion: number;
+  entity: "spots";
+  exportedAt: string;
+  scope: SpotJsonScope;
+  items: SpotsCentralJsonItem[];
+};
+// Schools/Stays import-export contract: stable shape, entity discriminator, and matching by id/name fallback.
+type SchoolJsonMatch = { publicId?: string; id?: number; name?: string };
+type CanonicalSchoolImport = {
+  name: string;
+  sports: string[];
+  offersLessons: boolean;
+  offersRental: boolean;
+  websiteUrl: string;
+  mapUrl: string;
+  shortDescription: string;
+  published: boolean;
+};
+type SchoolsCentralJsonItem = {
+  match?: SchoolJsonMatch;
+  school: CanonicalSchoolImport;
+  spotIds: number[];
+};
+type SchoolsCentralJsonPayload = {
+  schemaVersion: number;
+  entity: "schools";
+  exportedAt: string;
+  scope: SchoolsStaysJsonScope;
+  items: SchoolsCentralJsonItem[];
+};
+type StayJsonMatch = { publicId?: string; id?: number; name?: string };
+type CanonicalStayImport = {
+  name: string;
+  type: string;
+  websiteUrl: string;
+  mapUrl: string;
+  shortDescription: string;
+  published: boolean;
+};
+type StaysCentralJsonItem = {
+  match?: StayJsonMatch;
+  stay: CanonicalStayImport;
+  spotIds: number[];
+};
+type StaysCentralJsonPayload = {
+  schemaVersion: number;
+  entity: "stays";
+  exportedAt: string;
+  scope: SchoolsStaysJsonScope;
+  items: StaysCentralJsonItem[];
+};
 type ParsedImportRow = {
   rowNumber: number;
   kind: ImportRowKind;
   internalId: number | null;
   error: string | null;
-  values: Record<string, string>;
+  values: Record<string, unknown>;
   normalized: Record<string, unknown> | null;
 };
 type ExcelPreviewSession = {
@@ -138,7 +209,7 @@ if (!existingExcelState) {
 }
 
 function sanitizeFileName(input: string): string {
-  return input.replace(/[^a-zA-Z0-9._-]/g, "_") || "import.xlsx";
+  return input.replace(/[^a-zA-Z0-9._-]/g, "_") || "import.json";
 }
 function todayIsoDate(): string {
   return new Date().toISOString().slice(0, 10);
@@ -148,27 +219,6 @@ function slugifyName(name: string): string {
 }
 function isExcelCategory(v: string): v is ExcelCategory {
   return v === "spots" || v === "schools" || v === "stays";
-}
-function toCellString(value: unknown): string {
-  if (value == null) return "";
-  return String(value).trim();
-}
-function parseNullableNumber(raw: string): { ok: true; value: number | null } | { ok: false } {
-  if (!raw) return { ok: true, value: null };
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return { ok: false };
-  return { ok: true, value: n };
-}
-function parseBooleanCell(raw: string): { ok: true; value: boolean } | { ok: false } {
-  if (!raw) return { ok: true, value: false };
-  const lowered = raw.toLowerCase();
-  if (["1", "true", "yes", "y"].includes(lowered)) return { ok: true, value: true };
-  if (["0", "false", "no", "n"].includes(lowered)) return { ok: true, value: false };
-  return { ok: false };
-}
-function parseCsv(raw: string): string[] {
-  if (!raw) return [];
-  return Array.from(new Set(raw.split(",").map(v => v.trim()).filter(Boolean)));
 }
 function getExcelState(): ExcelStatusRow {
   return (sqlite.prepare(`
@@ -216,66 +266,605 @@ function pruneImportFileRetention() {
 function setNoStore(res: Response) {
   res.setHeader("Cache-Control", "no-store");
 }
-function writeWorkbookBase64(sheetName: string, headers: readonly string[], rows: Record<string, unknown>[]): string {
-  const aoa: unknown[][] = [Array.from(headers), ...rows.map(row => headers.map(h => row[h] ?? ""))];
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), sheetName);
-  const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
-  return buf.toString("base64");
+function writeJsonBase64(payload: unknown): string {
+  return Buffer.from(JSON.stringify(payload, null, 2), "utf8").toString("base64");
 }
-async function parseImportRowsFromWorkbookBase64(category: ExcelCategory, fileBase64: string): Promise<ParsedImportRow[]> {
-  const workbook = XLSX.read(Buffer.from(fileBase64, "base64"), { type: "buffer" });
-  const sheetName = XLSX_SHEETS[category];
-  const sheet = workbook.Sheets[sheetName];
-  if (!sheet) throw new Error(`Sheet "${sheetName}" not found`);
-  const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: "" });
-  const header = (rows[0] ?? []).map(toCellString);
-  const expected = XLSX_COLUMNS[category];
-  if (header.length !== expected.length || expected.some((col, i) => header[i] !== col)) {
-    throw new Error("Invalid column schema");
+function canonicalSpotFromSerialized(spot: ReturnType<typeof serializeSpot>): CanonicalSpotImport {
+  return {
+    slug: String(spot.slug ?? ""),
+    name: String(spot.name ?? ""),
+    country: String(spot.country ?? ""),
+    region: String(spot.region ?? ""),
+    latitude: typeof spot.latitude === "number" ? spot.latitude : null,
+    longitude: typeof spot.longitude === "number" ? spot.longitude : null,
+    heroImageUrl: String(spot.heroImageUrl ?? ""),
+    teaserText: String(spot.teaserText ?? ""),
+    destinationSummary: String(spot.destinationSummary ?? ""),
+    destinationDescription: String(spot.destinationDescription ?? ""),
+    kiteContextDescription: String(spot.kiteContextDescription ?? ""),
+    spotTypes: Array.isArray(spot.spotTypes) ? spot.spotTypes.map((v) => String(v)) : [],
+    riderLevels: Array.isArray(spot.riderLevels) ? spot.riderLevels.map((v) => String(v)) : [],
+    vibeTags: Array.isArray(spot.vibeTags) ? spot.vibeTags.map((v) => String(v)) : [],
+    nearestAirportName: String(spot.nearestAirportName ?? ""),
+    nearestAirportCode: String(spot.nearestAirportCode ?? ""),
+    airportTransferTime: String(spot.airportTransferTime ?? ""),
+    transportNote: String(spot.transportNote ?? ""),
+    googleMapsUrl: String(spot.googleMapsUrl ?? ""),
+    windyUrl: String(spot.windyUrl ?? ""),
+    windfinderUrl: String(spot.windfinderUrl ?? ""),
+    internalNotes: String(spot.internalNotes ?? ""),
+    sourceNotes: String(spot.sourceNotes ?? ""),
+    seoTitleOverride: String(spot.seoTitleOverride ?? ""),
+    seoDescriptionOverride: String(spot.seoDescriptionOverride ?? ""),
+    rankingMode: spot.rankingMode === "manual" ? "manual" : "auto",
+  };
+}
+function buildSpotsExportPayload(scope: SpotJsonScope, items: SpotsCentralJsonItem[]): SpotsCentralJsonPayload {
+  return {
+    schemaVersion: SPOTS_JSON_SCHEMA_VERSION,
+    entity: "spots",
+    exportedAt: new Date().toISOString(),
+    scope,
+    items,
+  };
+}
+const SPOTS_ITEM_KEYS = new Set(["match", "spot"]);
+const SPOTS_MATCH_KEYS = new Set(["publicId", "id", "slug"]);
+const SPOTS_SPOT_KEYS = new Set([
+  "slug", "name", "country", "region", "latitude", "longitude", "heroImageUrl", "teaserText",
+  "destinationSummary", "destinationDescription", "kiteContextDescription", "spotTypes", "riderLevels", "vibeTags",
+  "nearestAirportName", "nearestAirportCode", "airportTransferTime", "transportNote", "googleMapsUrl", "windyUrl",
+  "windfinderUrl", "internalNotes", "sourceNotes", "seoTitleOverride", "seoDescriptionOverride", "rankingMode",
+]);
+const MONTHLY_FORBIDDEN_KEYS = new Set([
+  "monthly", "month", "manualScore", "automaticWindScore", "averageBaseWind", "gusts", "windDays", "seasonLabel",
+  "avgKiteableWind10mKnots", "kiteableDaysCount", "avgKiteableHoursPerDay", "avgWaveHeightM", "maxWaveHeightM",
+  "avgWavePeriodS", "dominantWaveDirectionDeg", "primaryWindType", "secondaryWindType", "windSourceName", "windSourceUrl",
+]);
+function parseOptionalString(value: unknown): string | null {
+  if (value == null) return null;
+  if (typeof value !== "string") return null;
+  return value;
+}
+function parseOptionalNumberOrNull(value: unknown): number | null | "invalid" {
+  if (value == null) return null;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  return "invalid";
+}
+function parseStringArrayEnum(value: unknown, allowed: Set<string>): string[] | "invalid" {
+  if (!Array.isArray(value)) return "invalid";
+  const out = value.map((v) => (typeof v === "string" ? v.trim() : ""));
+  if (out.some((v) => !v || !allowed.has(v))) return "invalid";
+  return Array.from(new Set(out));
+}
+function parseSpotJsonItem(
+  rowNumber: number,
+  item: unknown,
+  spotByPublicId: Map<string, Spot>,
+  spotById: Map<number, Spot>,
+  spotBySlug: Map<string, Spot>,
+): ParsedImportRow {
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: "Item must be an object", values: {}, normalized: null };
   }
-  const dataRows = rows.slice(1);
-  if (dataRows.length > EXCEL_MAX_ROWS) throw new Error(`Maximum ${EXCEL_MAX_ROWS} data rows allowed`);
+  const itemObj = item as Record<string, unknown>;
+  const itemUnknown = Object.keys(itemObj).filter((k) => !SPOTS_ITEM_KEYS.has(k));
+  if (itemUnknown.length) {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: `Unsupported item keys: ${itemUnknown.join(", ")}`, values: itemObj, normalized: null };
+  }
+  if (itemObj.monthly !== undefined) {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: "monthly is not allowed in central spots import", values: itemObj, normalized: null };
+  }
+  const spotRaw = itemObj.spot;
+  if (!spotRaw || typeof spotRaw !== "object" || Array.isArray(spotRaw)) {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: "spot must be an object", values: itemObj, normalized: null };
+  }
+  const spotObj = spotRaw as Record<string, unknown>;
+  const spotUnknown = Object.keys(spotObj).filter((k) => !SPOTS_SPOT_KEYS.has(k));
+  if (spotUnknown.length) {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: `Unsupported spot keys: ${spotUnknown.join(", ")}`, values: itemObj, normalized: null };
+  }
+  for (const k of Object.keys(spotObj)) {
+    if (MONTHLY_FORBIDDEN_KEYS.has(k)) {
+      return { rowNumber, kind: "error_invalid_data", internalId: null, error: `Field ${k} is not allowed in central spots import`, values: itemObj, normalized: null };
+    }
+  }
 
-  const knownSpotIds = new Set((await storage.listSpots(false)).map(s => s.id));
-  const knownSchoolIds = new Set((await storage.listAllSchools({ page: 1, perPage: EXCEL_MAX_ROWS })).items.map(s => s.id));
-  const knownStayIds = new Set((await storage.listAllStays({ page: 1, perPage: EXCEL_MAX_ROWS })).items.map(s => s.id));
+  const matchRaw = itemObj.match;
+  let matchPublicId: string | undefined;
+  let matchId: number | undefined;
+  let matchSlug: string | undefined;
+  if (matchRaw !== undefined) {
+    if (!matchRaw || typeof matchRaw !== "object" || Array.isArray(matchRaw)) {
+      return { rowNumber, kind: "error_invalid_data", internalId: null, error: "match must be an object", values: itemObj, normalized: null };
+    }
+    const matchObj = matchRaw as Record<string, unknown>;
+    const matchUnknown = Object.keys(matchObj).filter((k) => !SPOTS_MATCH_KEYS.has(k));
+    if (matchUnknown.length) {
+      return { rowNumber, kind: "error_invalid_data", internalId: null, error: `Unsupported match keys: ${matchUnknown.join(", ")}`, values: itemObj, normalized: null };
+    }
+    if (matchObj.publicId !== undefined) {
+      if (typeof matchObj.publicId !== "string" || !matchObj.publicId.trim()) {
+        return { rowNumber, kind: "error_invalid_data", internalId: null, error: "match.publicId must be a non-empty string", values: itemObj, normalized: null };
+      }
+      matchPublicId = matchObj.publicId.trim();
+    }
+    if (matchObj.id !== undefined) {
+      if (!Number.isInteger(matchObj.id) || Number(matchObj.id) <= 0) {
+        return { rowNumber, kind: "error_invalid_data", internalId: null, error: "match.id must be a positive integer", values: itemObj, normalized: null };
+      }
+      matchId = Number(matchObj.id);
+    }
+    if (matchObj.slug !== undefined) {
+      if (typeof matchObj.slug !== "string" || !matchObj.slug.trim()) {
+        return { rowNumber, kind: "error_invalid_data", internalId: null, error: "match.slug must be a non-empty string", values: itemObj, normalized: null };
+      }
+      matchSlug = matchObj.slug.trim();
+    }
+  }
 
-  return dataRows.map((raw, i) => {
-    const values = Object.fromEntries(expected.map((h, idx) => [h, toCellString((raw as unknown[])[idx])])) as Record<string, string>;
-    const parsed = category === "spots"
-      ? parseSpotsRow(values, knownSpotIds)
-      : category === "schools"
-        ? parseSchoolRow(values, knownSchoolIds, knownSpotIds)
-        : parseStayRow(values, knownStayIds, knownSpotIds);
-    return { ...parsed, rowNumber: i + 2 };
-  });
+  const slug = parseOptionalString(spotObj.slug);
+  const name = parseOptionalString(spotObj.name);
+  const country = parseOptionalString(spotObj.country);
+  const region = parseOptionalString(spotObj.region);
+  const heroImageUrl = parseOptionalString(spotObj.heroImageUrl);
+  const teaserText = parseOptionalString(spotObj.teaserText);
+  const destinationSummary = parseOptionalString(spotObj.destinationSummary);
+  const destinationDescription = parseOptionalString(spotObj.destinationDescription);
+  const kiteContextDescription = parseOptionalString(spotObj.kiteContextDescription);
+  const nearestAirportName = parseOptionalString(spotObj.nearestAirportName);
+  const nearestAirportCode = parseOptionalString(spotObj.nearestAirportCode);
+  const airportTransferTime = parseOptionalString(spotObj.airportTransferTime);
+  const transportNote = parseOptionalString(spotObj.transportNote);
+  const googleMapsUrl = parseOptionalString(spotObj.googleMapsUrl);
+  const windyUrl = parseOptionalString(spotObj.windyUrl);
+  const windfinderUrl = parseOptionalString(spotObj.windfinderUrl);
+  const internalNotes = parseOptionalString(spotObj.internalNotes);
+  const sourceNotes = parseOptionalString(spotObj.sourceNotes);
+  const seoTitleOverride = parseOptionalString(spotObj.seoTitleOverride);
+  const seoDescriptionOverride = parseOptionalString(spotObj.seoDescriptionOverride);
+  const rankingModeRaw = spotObj.rankingMode;
+  const latitude = parseOptionalNumberOrNull(spotObj.latitude);
+  const longitude = parseOptionalNumberOrNull(spotObj.longitude);
+  const spotTypes = parseStringArrayEnum(spotObj.spotTypes, SPOT_TYPES);
+  const riderLevels = parseStringArrayEnum(spotObj.riderLevels, RIDER_LEVELS);
+  const vibeTags = parseStringArrayEnum(spotObj.vibeTags, VIBE_TAGS);
+
+  if (!name || !name.trim()) {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: "spot.name is required", values: itemObj, normalized: null };
+  }
+  if (slug == null || country == null || region == null || heroImageUrl == null || teaserText == null || destinationSummary == null
+    || destinationDescription == null || kiteContextDescription == null || nearestAirportName == null || nearestAirportCode == null
+    || airportTransferTime == null || transportNote == null || googleMapsUrl == null || windyUrl == null || windfinderUrl == null
+    || internalNotes == null || sourceNotes == null || seoTitleOverride == null || seoDescriptionOverride == null) {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: "spot contains invalid string field values", values: itemObj, normalized: null };
+  }
+  if (latitude === "invalid" || longitude === "invalid") {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: "spot latitude/longitude must be number or null", values: itemObj, normalized: null };
+  }
+  if (spotTypes === "invalid") {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: "Invalid spotTypes values", values: itemObj, normalized: null };
+  }
+  if (riderLevels === "invalid") {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: "Invalid riderLevels values", values: itemObj, normalized: null };
+  }
+  if (vibeTags === "invalid") {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: "Invalid vibeTags values", values: itemObj, normalized: null };
+  }
+  if (rankingModeRaw !== "manual" && rankingModeRaw !== "auto") {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: "rankingMode must be manual or auto", values: itemObj, normalized: null };
+  }
+
+  const matched = (matchPublicId ? spotByPublicId.get(matchPublicId) : undefined)
+    ?? (typeof matchId === "number" ? spotById.get(matchId) : undefined)
+    ?? (matchSlug ? spotBySlug.get(matchSlug) : undefined);
+
+  return {
+    rowNumber,
+    kind: matched ? "update" : "new",
+    internalId: matched?.id ?? null,
+    error: null,
+    values: itemObj,
+    normalized: {
+      slug: slug.trim(),
+      name: name.trim(),
+      country: country.trim(),
+      region: region.trim(),
+      latitude,
+      longitude,
+      heroImageUrl: heroImageUrl.trim(),
+      teaserText: teaserText.trim(),
+      destinationSummary: destinationSummary.trim(),
+      destinationDescription: destinationDescription.trim(),
+      kiteContextDescription: kiteContextDescription.trim(),
+      spotTypes,
+      riderLevels,
+      vibeTags,
+      nearestAirportName: nearestAirportName.trim(),
+      nearestAirportCode: nearestAirportCode.trim(),
+      airportTransferTime: airportTransferTime.trim(),
+      transportNote: transportNote.trim(),
+      googleMapsUrl: googleMapsUrl.trim(),
+      windyUrl: windyUrl.trim(),
+      windfinderUrl: windfinderUrl.trim(),
+      internalNotes: internalNotes.trim(),
+      sourceNotes: sourceNotes.trim(),
+      seoTitleOverride: seoTitleOverride.trim(),
+      seoDescriptionOverride: seoDescriptionOverride.trim(),
+      rankingMode: rankingModeRaw,
+    },
+  };
+}
+async function parseImportRowsFromSpotsJsonBase64(fileBase64: string): Promise<ParsedImportRow[]> {
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(Buffer.from(fileBase64, "base64").toString("utf8"));
+  } catch {
+    throw new Error("Invalid JSON file");
+  }
+  if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
+    throw new Error("Top-level JSON must be an object");
+  }
+  const obj = decoded as Record<string, unknown>;
+  const requiredTopLevel = ["schemaVersion", "entity", "exportedAt", "scope", "items"];
+  const missingTopLevel = requiredTopLevel.filter((k) => !(k in obj));
+  if (missingTopLevel.length) {
+    throw new Error(`Missing top-level fields: ${missingTopLevel.join(", ")}`);
+  }
+  if (obj.schemaVersion !== SPOTS_JSON_SCHEMA_VERSION) {
+    throw new Error(`Unsupported schemaVersion: ${String(obj.schemaVersion)}`);
+  }
+  if (obj.entity !== "spots") {
+    throw new Error("entity must be spots");
+  }
+  if (typeof obj.exportedAt !== "string" || !obj.exportedAt.trim()) {
+    throw new Error("exportedAt must be an ISO timestamp string");
+  }
+  if (typeof obj.scope !== "string" || !SPOTS_JSON_SCOPES.has(obj.scope)) {
+    throw new Error("scope must be all, filtered, or selected");
+  }
+  if (!Array.isArray(obj.items)) {
+    throw new Error("items must be an array");
+  }
+  if (obj.items.length > EXCEL_MAX_ROWS) throw new Error(`Maximum ${EXCEL_MAX_ROWS} items allowed`);
+
+  const allSpots = await storage.listSpots(false);
+  const spotByPublicId = new Map<string, Spot>(allSpots.filter((s) => !!s.publicId).map((s) => [String(s.publicId), s]));
+  const spotById = new Map<number, Spot>(allSpots.map((s) => [s.id, s]));
+  const spotBySlug = new Map<string, Spot>(allSpots.filter((s) => !!s.slug).map((s) => [String(s.slug), s]));
+
+  return obj.items.map((item, index) => parseSpotJsonItem(index + 2, item, spotByPublicId, spotById, spotBySlug));
+}
+function parseOptionalBoolean(value: unknown): boolean | "invalid" {
+  if (typeof value === "boolean") return value;
+  return "invalid";
+}
+function parseStringArray(value: unknown): string[] | "invalid" {
+  if (!Array.isArray(value)) return "invalid";
+  const out = value.map((v) => (typeof v === "string" ? v.trim() : ""));
+  if (out.some((v) => !v)) return "invalid";
+  return out;
+}
+function parsePositiveIntArray(value: unknown): number[] | "invalid" {
+  if (!Array.isArray(value)) return "invalid";
+  const out = value.map((v) => Number(v));
+  if (out.some((v) => !Number.isInteger(v) || v <= 0)) return "invalid";
+  return Array.from(new Set(out));
+}
+function parseJsonObjectBase64(fileBase64: string): Record<string, unknown> {
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(Buffer.from(fileBase64, "base64").toString("utf8"));
+  } catch {
+    throw new Error("Invalid JSON file");
+  }
+  if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
+    throw new Error("Top-level JSON must be an object");
+  }
+  return decoded as Record<string, unknown>;
+}
+function parseSchoolsJsonItem(
+  rowNumber: number,
+  item: unknown,
+  knownSpotIds: Set<number>,
+  schoolById: Map<number, any>,
+  schoolByName: Map<string, any>,
+): ParsedImportRow {
+  const allowedItemKeys = new Set(["match", "school", "spotIds"]);
+  const allowedMatchKeys = new Set(["publicId", "id", "name"]);
+  const allowedSchoolKeys = new Set(["name", "sports", "offersLessons", "offersRental", "websiteUrl", "mapUrl", "shortDescription", "published"]);
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: "Item must be an object", values: {}, normalized: null };
+  }
+  const itemObj = item as Record<string, unknown>;
+  const unknownItemKeys = Object.keys(itemObj).filter((k) => !allowedItemKeys.has(k));
+  if (unknownItemKeys.length) {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: `Unsupported item keys: ${unknownItemKeys.join(", ")}`, values: itemObj, normalized: null };
+  }
+  const schoolRaw = itemObj.school;
+  if (!schoolRaw || typeof schoolRaw !== "object" || Array.isArray(schoolRaw)) {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: "school must be an object", values: itemObj, normalized: null };
+  }
+  const schoolObj = schoolRaw as Record<string, unknown>;
+  const unknownSchoolKeys = Object.keys(schoolObj).filter((k) => !allowedSchoolKeys.has(k));
+  if (unknownSchoolKeys.length) {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: `Unsupported school keys: ${unknownSchoolKeys.join(", ")}`, values: itemObj, normalized: null };
+  }
+
+  const spotIds = parsePositiveIntArray(itemObj.spotIds);
+  if (spotIds === "invalid") {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: "spotIds must be an array of positive integers", values: itemObj, normalized: null };
+  }
+  if (spotIds.some((id) => !knownSpotIds.has(id))) {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: "spotIds contains unknown spot id", values: itemObj, normalized: null };
+  }
+
+  const name = parseOptionalString(schoolObj.name);
+  if (!name || !name.trim()) {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: "school.name is required", values: itemObj, normalized: null };
+  }
+  const sports = parseStringArray(schoolObj.sports);
+  if (sports === "invalid") {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: "school.sports must be a non-empty string array", values: itemObj, normalized: null };
+  }
+  if (sports.some((v) => !SCHOOL_SPORTS.has(v))) {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: "school.sports contains invalid enum value", values: itemObj, normalized: null };
+  }
+  const offersLessons = parseOptionalBoolean(schoolObj.offersLessons);
+  if (offersLessons === "invalid") {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: "school.offersLessons must be boolean", values: itemObj, normalized: null };
+  }
+  const offersRental = parseOptionalBoolean(schoolObj.offersRental);
+  if (offersRental === "invalid") {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: "school.offersRental must be boolean", values: itemObj, normalized: null };
+  }
+  const published = parseOptionalBoolean(schoolObj.published);
+  if (published === "invalid") {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: "school.published must be boolean", values: itemObj, normalized: null };
+  }
+  const websiteUrl = parseOptionalString(schoolObj.websiteUrl);
+  const mapUrl = parseOptionalString(schoolObj.mapUrl);
+  const shortDescription = parseOptionalString(schoolObj.shortDescription);
+  if (websiteUrl == null || mapUrl == null || shortDescription == null) {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: "school.websiteUrl, school.mapUrl and school.shortDescription must be strings", values: itemObj, normalized: null };
+  }
+
+  const matchRaw = itemObj.match;
+  let internalId: number | null = null;
+  if (matchRaw !== undefined) {
+    if (!matchRaw || typeof matchRaw !== "object" || Array.isArray(matchRaw)) {
+      return { rowNumber, kind: "error_invalid_data", internalId: null, error: "match must be an object", values: itemObj, normalized: null };
+    }
+    const matchObj = matchRaw as Record<string, unknown>;
+    const unknownMatchKeys = Object.keys(matchObj).filter((k) => !allowedMatchKeys.has(k));
+    if (unknownMatchKeys.length) {
+      return { rowNumber, kind: "error_invalid_data", internalId: null, error: `Unsupported match keys: ${unknownMatchKeys.join(", ")}`, values: itemObj, normalized: null };
+    }
+    if (matchObj.publicId !== undefined) {
+      return { rowNumber, kind: "error_id_not_found", internalId: null, error: "match.publicId is not supported for schools", values: itemObj, normalized: null };
+    }
+    if (matchObj.id !== undefined) {
+      const id = Number(matchObj.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        return { rowNumber, kind: "error_invalid_data", internalId: null, error: "match.id must be a positive integer", values: itemObj, normalized: null };
+      }
+      const existing = schoolById.get(id);
+      if (!existing) {
+        return { rowNumber, kind: "error_id_not_found", internalId: id, error: "match.id not found", values: itemObj, normalized: null };
+      }
+      internalId = existing.id;
+    } else if (matchObj.name !== undefined) {
+      if (typeof matchObj.name !== "string" || !matchObj.name.trim()) {
+        return { rowNumber, kind: "error_invalid_data", internalId: null, error: "match.name must be a non-empty string", values: itemObj, normalized: null };
+      }
+      internalId = schoolByName.get(matchObj.name.trim().toLowerCase())?.id ?? null;
+    }
+  }
+  if (internalId == null) {
+    internalId = schoolByName.get(name.trim().toLowerCase())?.id ?? null;
+  }
+  return {
+    rowNumber,
+    kind: internalId ? "update" : "new",
+    internalId,
+    error: null,
+    values: itemObj,
+    normalized: {
+      name: name.trim(),
+      sports,
+      offersLessons,
+      offersRental,
+      websiteUrl: websiteUrl.trim(),
+      mapUrl: mapUrl.trim(),
+      shortDescription: shortDescription.trim(),
+      published,
+      spotIds,
+    },
+  };
+}
+function parseStaysJsonItem(
+  rowNumber: number,
+  item: unknown,
+  knownSpotIds: Set<number>,
+  stayById: Map<number, any>,
+  stayByName: Map<string, any>,
+): ParsedImportRow {
+  const allowedItemKeys = new Set(["match", "stay", "spotIds"]);
+  const allowedMatchKeys = new Set(["publicId", "id", "name"]);
+  const allowedStayKeys = new Set(["name", "type", "websiteUrl", "mapUrl", "shortDescription", "published"]);
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: "Item must be an object", values: {}, normalized: null };
+  }
+  const itemObj = item as Record<string, unknown>;
+  const unknownItemKeys = Object.keys(itemObj).filter((k) => !allowedItemKeys.has(k));
+  if (unknownItemKeys.length) {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: `Unsupported item keys: ${unknownItemKeys.join(", ")}`, values: itemObj, normalized: null };
+  }
+  const stayRaw = itemObj.stay;
+  if (!stayRaw || typeof stayRaw !== "object" || Array.isArray(stayRaw)) {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: "stay must be an object", values: itemObj, normalized: null };
+  }
+  const stayObj = stayRaw as Record<string, unknown>;
+  const unknownStayKeys = Object.keys(stayObj).filter((k) => !allowedStayKeys.has(k));
+  if (unknownStayKeys.length) {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: `Unsupported stay keys: ${unknownStayKeys.join(", ")}`, values: itemObj, normalized: null };
+  }
+
+  const spotIds = parsePositiveIntArray(itemObj.spotIds);
+  if (spotIds === "invalid") {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: "spotIds must be an array of positive integers", values: itemObj, normalized: null };
+  }
+  if (spotIds.some((id) => !knownSpotIds.has(id))) {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: "spotIds contains unknown spot id", values: itemObj, normalized: null };
+  }
+
+  const name = parseOptionalString(stayObj.name);
+  if (!name || !name.trim()) {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: "stay.name is required", values: itemObj, normalized: null };
+  }
+  const type = parseOptionalString(stayObj.type);
+  const websiteUrl = parseOptionalString(stayObj.websiteUrl);
+  const mapUrl = parseOptionalString(stayObj.mapUrl);
+  const shortDescription = parseOptionalString(stayObj.shortDescription);
+  const published = parseOptionalBoolean(stayObj.published);
+  if (type == null || websiteUrl == null || mapUrl == null || shortDescription == null) {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: "stay.type, stay.websiteUrl, stay.mapUrl and stay.shortDescription must be strings", values: itemObj, normalized: null };
+  }
+  if (published === "invalid") {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: "stay.published must be boolean", values: itemObj, normalized: null };
+  }
+  if (type && !STAY_TYPES.has(type)) {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: "stay.type contains invalid enum value", values: itemObj, normalized: null };
+  }
+
+  const matchRaw = itemObj.match;
+  let internalId: number | null = null;
+  if (matchRaw !== undefined) {
+    if (!matchRaw || typeof matchRaw !== "object" || Array.isArray(matchRaw)) {
+      return { rowNumber, kind: "error_invalid_data", internalId: null, error: "match must be an object", values: itemObj, normalized: null };
+    }
+    const matchObj = matchRaw as Record<string, unknown>;
+    const unknownMatchKeys = Object.keys(matchObj).filter((k) => !allowedMatchKeys.has(k));
+    if (unknownMatchKeys.length) {
+      return { rowNumber, kind: "error_invalid_data", internalId: null, error: `Unsupported match keys: ${unknownMatchKeys.join(", ")}`, values: itemObj, normalized: null };
+    }
+    if (matchObj.publicId !== undefined) {
+      return { rowNumber, kind: "error_id_not_found", internalId: null, error: "match.publicId is not supported for stays", values: itemObj, normalized: null };
+    }
+    if (matchObj.id !== undefined) {
+      const id = Number(matchObj.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        return { rowNumber, kind: "error_invalid_data", internalId: null, error: "match.id must be a positive integer", values: itemObj, normalized: null };
+      }
+      const existing = stayById.get(id);
+      if (!existing) {
+        return { rowNumber, kind: "error_id_not_found", internalId: id, error: "match.id not found", values: itemObj, normalized: null };
+      }
+      internalId = existing.id;
+    } else if (matchObj.name !== undefined) {
+      if (typeof matchObj.name !== "string" || !matchObj.name.trim()) {
+        return { rowNumber, kind: "error_invalid_data", internalId: null, error: "match.name must be a non-empty string", values: itemObj, normalized: null };
+      }
+      internalId = stayByName.get(matchObj.name.trim().toLowerCase())?.id ?? null;
+    }
+  }
+  if (internalId == null) {
+    internalId = stayByName.get(name.trim().toLowerCase())?.id ?? null;
+  }
+  return {
+    rowNumber,
+    kind: internalId ? "update" : "new",
+    internalId,
+    error: null,
+    values: itemObj,
+    normalized: {
+      name: name.trim(),
+      type: type.trim(),
+      websiteUrl: websiteUrl.trim(),
+      mapUrl: mapUrl.trim(),
+      shortDescription: shortDescription.trim(),
+      published,
+      spotIds,
+    },
+  };
+}
+async function parseImportRowsFromSchoolsJsonBase64(fileBase64: string): Promise<ParsedImportRow[]> {
+  const obj = parseJsonObjectBase64(fileBase64);
+  const requiredTopLevel = ["schemaVersion", "entity", "exportedAt", "scope", "items"];
+  const missingTopLevel = requiredTopLevel.filter((k) => !(k in obj));
+  if (missingTopLevel.length) throw new Error(`Missing top-level fields: ${missingTopLevel.join(", ")}`);
+  if (obj.schemaVersion !== SPOTS_JSON_SCHEMA_VERSION) throw new Error(`Unsupported schemaVersion: ${String(obj.schemaVersion)}`);
+  if (obj.entity !== "schools") throw new Error("entity must be schools");
+  if (typeof obj.exportedAt !== "string" || !obj.exportedAt.trim()) throw new Error("exportedAt must be an ISO timestamp string");
+  if (typeof obj.scope !== "string" || !SCHOOLS_STAYS_JSON_SCOPES.has(obj.scope)) throw new Error("scope must be all, filtered, or selected");
+  if (!Array.isArray(obj.items)) throw new Error("items must be an array");
+  if (obj.items.length > EXCEL_MAX_ROWS) throw new Error(`Maximum ${EXCEL_MAX_ROWS} items allowed`);
+
+  const knownSpotIds = new Set((await storage.listSpots(false)).map((s) => s.id));
+  const schoolsList = (await storage.listAllSchools({ page: 1, perPage: EXCEL_MAX_ROWS })).items;
+  const schoolById = new Map<number, any>(schoolsList.map((s) => [s.id, s]));
+  const schoolByName = new Map<string, any>(schoolsList.map((s) => [String(s.name || "").trim().toLowerCase(), s]));
+  return obj.items.map((item, idx) => parseSchoolsJsonItem(idx + 2, item, knownSpotIds, schoolById, schoolByName));
+}
+async function parseImportRowsFromStaysJsonBase64(fileBase64: string): Promise<ParsedImportRow[]> {
+  const obj = parseJsonObjectBase64(fileBase64);
+  const requiredTopLevel = ["schemaVersion", "entity", "exportedAt", "scope", "items"];
+  const missingTopLevel = requiredTopLevel.filter((k) => !(k in obj));
+  if (missingTopLevel.length) throw new Error(`Missing top-level fields: ${missingTopLevel.join(", ")}`);
+  if (obj.schemaVersion !== SPOTS_JSON_SCHEMA_VERSION) throw new Error(`Unsupported schemaVersion: ${String(obj.schemaVersion)}`);
+  if (obj.entity !== "stays") throw new Error("entity must be stays");
+  if (typeof obj.exportedAt !== "string" || !obj.exportedAt.trim()) throw new Error("exportedAt must be an ISO timestamp string");
+  if (typeof obj.scope !== "string" || !SCHOOLS_STAYS_JSON_SCOPES.has(obj.scope)) throw new Error("scope must be all, filtered, or selected");
+  if (!Array.isArray(obj.items)) throw new Error("items must be an array");
+  if (obj.items.length > EXCEL_MAX_ROWS) throw new Error(`Maximum ${EXCEL_MAX_ROWS} items allowed`);
+
+  const knownSpotIds = new Set((await storage.listSpots(false)).map((s) => s.id));
+  const staysList = (await storage.listAllStays({ page: 1, perPage: EXCEL_MAX_ROWS })).items;
+  const stayById = new Map<number, any>(staysList.map((s) => [s.id, s]));
+  const stayByName = new Map<string, any>(staysList.map((s) => [String(s.name || "").trim().toLowerCase(), s]));
+  return obj.items.map((item, idx) => parseStaysJsonItem(idx + 2, item, knownSpotIds, stayById, stayByName));
 }
 function buildPreviewResponse(session: ExcelPreviewSession) {
   const category = session.category;
-  const expected = XLSX_COLUMNS[category];
-  const summary = {
-    newCount: session.rows.filter(r => r.kind === "new").length,
-    updateCount: session.rows.filter(r => r.kind === "update").length,
-    errorIdNotFoundCount: session.rows.filter(r => r.kind === "error_id_not_found").length,
-    errorInvalidDataCount: session.rows.filter(r => r.kind === "error_invalid_data").length,
-  };
-  const updatesXlsxBase64 = writeWorkbookBase64(
-    XLSX_SHEETS[category],
-    expected,
-    session.rows.filter(r => r.kind === "new" || r.kind === "update").map(r => r.values),
-  );
-  const errorsXlsxBase64 = writeWorkbookBase64(
-    XLSX_SHEETS[category],
-    [...expected, "error"],
-    session.rows.filter(r => r.kind.startsWith("error")).map(r => ({ ...r.values, error: r.error ?? "" })),
-  );
-  return {
-    previewId: session.id,
-    summary,
-    rows: session.rows.map(r => ({ rowNumber: r.rowNumber, kind: r.kind, internalId: r.internalId, error: r.error })),
-    files: { updatesFileName: "updates.xlsx", updatesFileBase64: updatesXlsxBase64, errorsFileName: "errors.xlsx", errorsFileBase64: errorsXlsxBase64 },
-  };
+  if (category === "spots" || category === "schools" || category === "stays") {
+    const summary = {
+      newCount: session.rows.filter(r => r.kind === "new").length,
+      updateCount: session.rows.filter(r => r.kind === "update").length,
+      errorIdNotFoundCount: session.rows.filter(r => r.kind === "error_id_not_found").length,
+      errorInvalidDataCount: session.rows.filter(r => r.kind === "error_invalid_data").length,
+    };
+    const entity = category === "spots" ? "spots" : category === "schools" ? "schools" : "stays";
+    const updates = {
+      schemaVersion: SPOTS_JSON_SCHEMA_VERSION,
+      entity,
+      exportedAt: new Date().toISOString(),
+      scope: "all",
+      items: session.rows
+        .filter(r => r.kind === "new" || r.kind === "update")
+        .map((r) => ({ rowNumber: r.rowNumber, kind: r.kind, item: r.values })),
+    };
+    const errors = {
+      schemaVersion: SPOTS_JSON_SCHEMA_VERSION,
+      entity,
+      exportedAt: new Date().toISOString(),
+      scope: "all",
+      items: session.rows
+        .filter(r => r.kind.startsWith("error"))
+        .map((r) => ({ rowNumber: r.rowNumber, kind: r.kind, error: r.error ?? "", item: r.values })),
+    };
+    return {
+      previewId: session.id,
+      summary,
+      rows: session.rows.map(r => ({ rowNumber: r.rowNumber, kind: r.kind, internalId: r.internalId, error: r.error })),
+      files: {
+        updatesFileName: "updates.json",
+        updatesFileBase64: writeJsonBase64(updates),
+        errorsFileName: "errors.json",
+        errorsFileBase64: writeJsonBase64(errors),
+      },
+    };
+  }
+  throw new Error("Unsupported category for preview response");
 }
 const LEGAL_PAGE_META = {
   "privacy-policy": {
@@ -596,8 +1185,6 @@ function serializeSpot(s: Spot, preview = true) {
     spotTypes: parseArr(v.spotTypes),
     riderLevels: parseArr(v.riderLevels),
     vibeTags: parseArr(v.vibeTags),
-    waterStates: parseArr((v as any).waterStates),
-    beginnerFriendly: !!v.beginnerFriendly,
     publicId: v.publicId || "",
     dataStatus,
     dataNeedsRefresh: dataStatus !== "fresh",
@@ -646,7 +1233,7 @@ function serializeLinked<T extends { publishedSnapshot?: any; published?: any; h
 // stringify array fields before writing
 function normalizeSpotInput(body: any) {
   const out = { ...body };
-  for (const k of ["spotTypes", "riderLevels", "vibeTags", "waterStates"]) {
+  for (const k of ["spotTypes", "riderLevels", "vibeTags"]) {
     if (Array.isArray(out[k])) out[k] = JSON.stringify(out[k]);
   }
   return out;
@@ -670,128 +1257,6 @@ function serializeAdminUser(u: any) {
     isFullyLocked: !!u.isFullyLocked,
     createdAt: u.createdAt ?? null,
     updatedAt: u.updatedAt ?? null,
-  };
-}
-
-function parseInternalId(raw: string): number | null | "invalid" {
-  if (!raw) return null;
-  const n = Number(raw);
-  if (!Number.isInteger(n) || n <= 0) return "invalid";
-  return n;
-}
-
-function parseSpotsRow(values: Record<string, string>, knownSpotIds: Set<number>): ParsedImportRow {
-  const internal = parseInternalId(values.internal_id);
-  if (internal === "invalid") return { rowNumber: 0, kind: "error_invalid_data", internalId: null, error: "Invalid internal_id", values, normalized: null };
-  if (typeof internal === "number" && !knownSpotIds.has(internal)) return { rowNumber: 0, kind: "error_id_not_found", internalId: internal, error: "ID not found", values, normalized: null };
-  if (!values.name.trim()) return { rowNumber: 0, kind: "error_invalid_data", internalId: internal, error: "Name is required", values, normalized: null };
-
-  const latitude = parseNullableNumber(values.latitude);
-  const longitude = parseNullableNumber(values.longitude);
-  const weatherLatitude = parseNullableNumber(values.weather_latitude);
-  const weatherLongitude = parseNullableNumber(values.weather_longitude);
-  const onshore = parseNullableNumber(values.onshore_direction_degrees);
-  if (!latitude.ok || !longitude.ok || !weatherLatitude.ok || !weatherLongitude.ok || !onshore.ok) {
-    return { rowNumber: 0, kind: "error_invalid_data", internalId: internal, error: "Invalid number value", values, normalized: null };
-  }
-  const riderLevels = parseCsv(values.rider_levels).map(v => v.toLowerCase());
-  if (riderLevels.some(v => !RIDER_LEVELS.has(v))) {
-    return { rowNumber: 0, kind: "error_invalid_data", internalId: internal, error: "Invalid rider level", values, normalized: null };
-  }
-  const waterStates = parseCsv(values.water_states).map(v => v[0]?.toUpperCase() + v.slice(1).toLowerCase());
-  if (waterStates.some(v => !WATER_STATES.has(v))) {
-    return { rowNumber: 0, kind: "error_invalid_data", internalId: internal, error: "Invalid water state", values, normalized: null };
-  }
-  const destinationType = parseCsv(values.destination_type).map(v => slugifyName(v)).filter(Boolean);
-  if (destinationType.some(v => !SPOT_TYPES.has(v))) {
-    return { rowNumber: 0, kind: "error_invalid_data", internalId: internal, error: "Invalid destination type", values, normalized: null };
-  }
-  const destinationVibes = parseCsv(values.destination_vibes).map(v => slugifyName(v)).filter(Boolean);
-  if (destinationVibes.some(v => !VIBE_TAGS.has(v))) {
-    return { rowNumber: 0, kind: "error_invalid_data", internalId: internal, error: "Invalid destination vibe", values, normalized: null };
-  }
-  return {
-    rowNumber: 0,
-    kind: typeof internal === "number" ? "update" : "new",
-    internalId: internal,
-    error: null,
-    values,
-    normalized: {
-      name: values.name.trim(),
-      country: values.country_code.trim(),
-      latitude: latitude.value ?? weatherLatitude.value,
-      longitude: longitude.value ?? weatherLongitude.value,
-      destinationDescription: values.spot_description,
-      kiteContextDescription: values.kite_conditions_description,
-      dataQualityNote: values.warning_text,
-      riderLevels,
-      waterStates,
-      spotTypes: destinationType,
-      vibeTags: destinationVibes,
-    },
-  };
-}
-
-function parseSchoolRow(values: Record<string, string>, knownSchoolIds: Set<number>, knownSpotIds: Set<number>): ParsedImportRow {
-  const internal = parseInternalId(values.internal_id);
-  if (internal === "invalid") return { rowNumber: 0, kind: "error_invalid_data", internalId: null, error: "Invalid internal_id", values, normalized: null };
-  if (typeof internal === "number" && !knownSchoolIds.has(internal)) return { rowNumber: 0, kind: "error_id_not_found", internalId: internal, error: "ID not found", values, normalized: null };
-  if (!values.name.trim()) return { rowNumber: 0, kind: "error_invalid_data", internalId: internal, error: "Name is required", values, normalized: null };
-  const lessons = parseBooleanCell(values.lessons);
-  const rental = parseBooleanCell(values.rental);
-  const published = parseBooleanCell(values.published);
-  if (!lessons.ok || !rental.ok || !published.ok) return { rowNumber: 0, kind: "error_invalid_data", internalId: internal, error: "Invalid boolean value", values, normalized: null };
-  const sports = parseCsv(values.sports);
-  if (sports.some(v => !SCHOOL_SPORTS.has(v))) return { rowNumber: 0, kind: "error_invalid_data", internalId: internal, error: "Invalid sport value", values, normalized: null };
-  const spotIds = parseCsv(values.spot_ids).map(v => Number(v));
-  if (spotIds.some(v => !Number.isInteger(v) || v <= 0 || !knownSpotIds.has(v))) {
-    return { rowNumber: 0, kind: "error_invalid_data", internalId: internal, error: "Invalid spot_ids", values, normalized: null };
-  }
-  return {
-    rowNumber: 0,
-    kind: typeof internal === "number" ? "update" : "new",
-    internalId: internal,
-    error: null,
-    values,
-    normalized: {
-      name: values.name.trim(),
-      sports,
-      offersLessons: lessons.value,
-      offersRental: rental.value,
-      websiteUrl: values.website_url,
-      mapUrl: values.google_maps_url,
-      shortDescription: values.short_description,
-      published: published.value,
-      spotIds: Array.from(new Set(spotIds)),
-    },
-  };
-}
-
-function parseStayRow(values: Record<string, string>, knownStayIds: Set<number>, knownSpotIds: Set<number>): ParsedImportRow {
-  const internal = parseInternalId(values.internal_id);
-  if (internal === "invalid") return { rowNumber: 0, kind: "error_invalid_data", internalId: null, error: "Invalid internal_id", values, normalized: null };
-  if (typeof internal === "number" && !knownStayIds.has(internal)) return { rowNumber: 0, kind: "error_id_not_found", internalId: internal, error: "ID not found", values, normalized: null };
-  if (!values.name.trim()) return { rowNumber: 0, kind: "error_invalid_data", internalId: internal, error: "Name is required", values, normalized: null };
-  const published = parseBooleanCell(values.published);
-  if (!published.ok) return { rowNumber: 0, kind: "error_invalid_data", internalId: internal, error: "Invalid boolean value", values, normalized: null };
-  if (values.type && !STAY_TYPES.has(values.type)) return { rowNumber: 0, kind: "error_invalid_data", internalId: internal, error: "Invalid stay type", values, normalized: null };
-  const spotIds = parseCsv(values.spot_ids).map(v => Number(v));
-  if (spotIds.some(v => !Number.isInteger(v) || v <= 0 || !knownSpotIds.has(v))) return { rowNumber: 0, kind: "error_invalid_data", internalId: internal, error: "Invalid spot_ids", values, normalized: null };
-  return {
-    rowNumber: 0,
-    kind: typeof internal === "number" ? "update" : "new",
-    internalId: internal,
-    error: null,
-    values,
-    normalized: {
-      name: values.name.trim(),
-      type: values.type,
-      websiteUrl: values.website_url,
-      mapUrl: values.google_maps_url,
-      shortDescription: values.short_description,
-      published: published.value,
-      spotIds: Array.from(new Set(spotIds)),
-    },
   };
 }
 
@@ -1033,36 +1498,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const selectedIds = Array.isArray(req.body?.selectedIds) ? req.body.selectedIds.map((v: unknown) => Number(v)).filter((v: number) => Number.isInteger(v) && v > 0) : [];
     const filters = (req.body?.filters ?? {}) as ListingsFilter & { q?: string };
     const date = todayIsoDate();
-    const headers = XLSX_COLUMNS[category];
 
-    let rows: Record<string, unknown>[] = [];
     if (category === "spots") {
+      if (!SPOTS_JSON_SCOPES.has(scope)) return res.status(400).json({ error: "invalid scope" });
+      const spotScope = scope as SpotJsonScope;
       let list = (await storage.listSpots(false)).map(s => serializeSpot(s, true));
       if (filters.q) {
         const q = filters.q.toLowerCase();
         list = list.filter(s => s.name.toLowerCase().includes(q) || (s.country || "").toLowerCase().includes(q));
       }
-      if (scope === "selected") list = list.filter(s => selectedIds.includes(s.id));
-      rows = list.map(s => ({
-        internal_id: s.id,
-        name: s.name ?? "",
-        country_code: s.country ?? "",
-        latitude: s.latitude ?? "",
-        longitude: s.longitude ?? "",
-        weather_latitude: s.latitude ?? "",
-        weather_longitude: s.longitude ?? "",
-        onshore_direction_degrees: "",
-        spot_description: s.destinationDescription ?? "",
-        kite_conditions_description: s.kiteContextDescription ?? "",
-        warning_text: s.dataQualityNote ?? "",
-        rider_levels: (s.riderLevels ?? []).join(", "),
-        water_states: (s.waterStates ?? []).join(", "),
-        destination_type: (s.spotTypes ?? []).join(", "),
-        destination_vibes: (s.vibeTags ?? []).join(", "),
+      if (spotScope === "selected") list = list.filter(s => selectedIds.includes(s.id));
+      const items = list.map((s) => ({
+        match: {
+          publicId: String(s.publicId ?? "") || undefined,
+          id: s.id,
+          slug: String(s.slug ?? "") || undefined,
+        },
+        spot: canonicalSpotFromSerialized(s),
       }));
+      const payload = buildSpotsExportPayload(spotScope, items);
+      const fileName = `spots-export-${date}.json`;
+      const fileBase64 = writeJsonBase64(payload);
+      return res.json({ fileName, fileBase64 });
     } else if (category === "schools") {
+      if (!SCHOOLS_STAYS_JSON_SCOPES.has(scope)) return res.status(400).json({ error: "invalid scope" });
+      const schoolsScope = scope as SchoolsStaysJsonScope;
       let list = (await storage.listAllSchools({ ...filters, page: 1, perPage: EXCEL_MAX_ROWS })).items;
-      if (scope === "selected") list = list.filter(s => selectedIds.includes(s.id));
+      if (schoolsScope === "selected") list = list.filter(s => selectedIds.includes(s.id));
       const assignments = db.select().from(spotSchools).all();
       const spotIdsBySchool = new Map<number, number[]>();
       for (const row of assignments) {
@@ -1070,21 +1532,37 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         cur.push(row.spotId);
         spotIdsBySchool.set(row.schoolId, cur);
       }
-      rows = list.map(s => ({
-        internal_id: s.id,
-        name: s.name ?? "",
-        sports: parseArr(s.sports).join(", "),
-        lessons: !!s.offersLessons,
-        rental: !!s.offersRental,
-        website_url: s.websiteUrl ?? "",
-        google_maps_url: s.mapUrl ?? "",
-        short_description: s.shortDescription ?? "",
-        published: !!s.published,
-        spot_ids: (spotIdsBySchool.get(s.id) ?? []).join(", "),
-      }));
+      const payload: SchoolsCentralJsonPayload = {
+        schemaVersion: SPOTS_JSON_SCHEMA_VERSION,
+        entity: "schools",
+        exportedAt: new Date().toISOString(),
+        scope: schoolsScope,
+        items: list.map((s) => ({
+          match: {
+            id: s.id,
+            name: s.name ?? undefined,
+          },
+          school: {
+            name: s.name ?? "",
+            sports: parseArr(s.sports),
+            offersLessons: !!s.offersLessons,
+            offersRental: !!s.offersRental,
+            websiteUrl: s.websiteUrl ?? "",
+            mapUrl: s.mapUrl ?? "",
+            shortDescription: s.shortDescription ?? "",
+            published: !!s.published,
+          },
+          spotIds: Array.from(new Set(spotIdsBySchool.get(s.id) ?? [])),
+        })),
+      };
+      const fileBase64 = writeJsonBase64(payload);
+      const fileName = `${category}-export-${date}.json`;
+      return res.json({ fileName, fileBase64 });
     } else {
+      if (!SCHOOLS_STAYS_JSON_SCOPES.has(scope)) return res.status(400).json({ error: "invalid scope" });
+      const staysScope = scope as SchoolsStaysJsonScope;
       let list = (await storage.listAllStays({ ...filters, page: 1, perPage: EXCEL_MAX_ROWS })).items;
-      if (scope === "selected") list = list.filter(s => selectedIds.includes(s.id));
+      if (staysScope === "selected") list = list.filter(s => selectedIds.includes(s.id));
       const assignments = db.select().from(spotStays).all();
       const spotIdsByStay = new Map<number, number[]>();
       for (const row of assignments) {
@@ -1092,21 +1570,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         cur.push(row.spotId);
         spotIdsByStay.set(row.stayId, cur);
       }
-      rows = list.map(s => ({
-        internal_id: s.id,
-        name: s.name ?? "",
-        type: s.type ?? "",
-        website_url: s.websiteUrl ?? "",
-        google_maps_url: s.mapUrl ?? "",
-        short_description: s.shortDescription ?? "",
-        published: !!s.published,
-        spot_ids: (spotIdsByStay.get(s.id) ?? []).join(", "),
-      }));
+      const payload: StaysCentralJsonPayload = {
+        schemaVersion: SPOTS_JSON_SCHEMA_VERSION,
+        entity: "stays",
+        exportedAt: new Date().toISOString(),
+        scope: staysScope,
+        items: list.map((s) => ({
+          match: {
+            id: s.id,
+            name: s.name ?? undefined,
+          },
+          stay: {
+            name: s.name ?? "",
+            type: s.type ?? "",
+            websiteUrl: s.websiteUrl ?? "",
+            mapUrl: s.mapUrl ?? "",
+            shortDescription: s.shortDescription ?? "",
+            published: !!s.published,
+          },
+          spotIds: Array.from(new Set(spotIdsByStay.get(s.id) ?? [])),
+        })),
+      };
+      const fileBase64 = writeJsonBase64(payload);
+      const fileName = `${category}-export-${date}.json`;
+      return res.json({ fileName, fileBase64 });
     }
-    if (scope === "template") rows = [];
-    const fileBase64 = writeWorkbookBase64(XLSX_SHEETS[category], headers, rows);
-    const fileName = scope === "template" ? `${category}-template-${date}.xlsx` : `${category}-export-${date}.xlsx`;
-    res.json({ fileName, fileBase64 });
   });
 
   app.post("/api/admin/excel/import/:category/preview", requireAuth, async (req, res) => {
@@ -1115,14 +1603,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (weatherImportActive) return res.status(409).json({ error: "Weather import is active" });
     if (isExcelImportActive()) return res.status(409).json({ error: "Another Excel import is active" });
 
-    const fileName = sanitizeFileName(String(req.body?.fileName ?? "import.xlsx"));
-    if (!fileName.toLowerCase().endsWith(".xlsx")) return res.status(400).json({ error: "Only .xlsx files are supported" });
+    const defaultName = "import.json";
+    const fileName = sanitizeFileName(String(req.body?.fileName ?? defaultName));
+    if (!fileName.toLowerCase().endsWith(".json")) {
+      return res.status(400).json({ error: "Only .json files are supported" });
+    }
     const fileBase64 = String(req.body?.fileBase64 ?? "");
     if (!fileBase64) return res.status(400).json({ error: "fileBase64 required" });
     setExcelState("Uploading", { category, message: `Uploading ${fileName}` });
     try {
       setExcelState("Validating", { category, message: `Validating ${fileName}` });
-      const parsedRows = await parseImportRowsFromWorkbookBase64(category, fileBase64);
+      const parsedRows = category === "spots"
+        ? await parseImportRowsFromSpotsJsonBase64(fileBase64)
+        : category === "schools"
+          ? await parseImportRowsFromSchoolsJsonBase64(fileBase64)
+          : await parseImportRowsFromStaysJsonBase64(fileBase64);
       const nowIso = new Date().toISOString();
       const summary = {
         newCount: parsedRows.filter(r => r.kind === "new").length,
@@ -1173,7 +1668,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       `).get(state.run_id, category) as { id: number; file_name: string; source_file_base64: string | null } | undefined;
       if (fallbackRow?.source_file_base64) {
         try {
-          const parsedRows = await parseImportRowsFromWorkbookBase64(category, fallbackRow.source_file_base64);
+          const parsedRows = category === "spots"
+            ? await parseImportRowsFromSpotsJsonBase64(fallbackRow.source_file_base64)
+            : category === "schools"
+              ? await parseImportRowsFromSchoolsJsonBase64(fallbackRow.source_file_base64)
+              : await parseImportRowsFromStaysJsonBase64(fallbackRow.source_file_base64);
           const restoredSession: ExcelPreviewSession = {
             id: crypto.randomUUID(),
             category,
@@ -1235,7 +1734,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           if (category === "spots") {
             const payload = normalizeSpotInput(row.normalized);
             if (row.kind === "new") {
-              const base = slugifyName(String(payload.name || "spot")) || "spot";
+              const requestedSlug = slugifyName(String(payload.slug || ""));
+              const base = requestedSlug || slugifyName(String(payload.name || "spot")) || "spot";
               let slug = base;
               let idx = 1;
               while (db.select().from(spots).where(eq(spots.slug, slug)).get()) slug = `${base}-${idx++}`;
@@ -1473,7 +1973,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const countries = toArray(req.query.country);
     const countrySet = new Set(countries);
     const windTypes = ([] as string[]).concat(req.query.windType as any || []);
-    const waterStates = ([] as string[]).concat(req.query.waterState as any || []);
     const windMinRaw = req.query.windMin != null ? Number(req.query.windMin) : null;
     const windMaxRaw = req.query.windMax != null ? Number(req.query.windMax) : null;
     const windMin = windMinRaw != null && Number.isFinite(windMinRaw) ? windMinRaw : null;
@@ -1538,9 +2037,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           window.some((m: any) => m.primaryWindType === wt || m.secondaryWindType === wt),
         );
       });
-    }
-    if (waterStates.length) {
-      rows = rows.filter(r => waterStates.some(ws => (r.waterStates ?? []).includes(ws)));
     }
     if (windRangeActive) {
       rows = rows.filter(r => {

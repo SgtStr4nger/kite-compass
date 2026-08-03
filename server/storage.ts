@@ -33,7 +33,6 @@ ensureColumns("spots", [
   { name: "data_source", ddl: "data_source TEXT DEFAULT ''" },
   { name: "data_last_refreshed_at", ddl: "data_last_refreshed_at TEXT" },
   { name: "data_quality_note", ddl: "data_quality_note TEXT DEFAULT ''" },
-  { name: "water_states", ddl: "water_states TEXT DEFAULT '[]'" },
   { name: "weather_last_error", ddl: "weather_last_error TEXT" },
   { name: "weather_coord_updated_at", ddl: "weather_coord_updated_at TEXT" },
   { name: "weather_has_manual_changes", ddl: "weather_has_manual_changes INTEGER DEFAULT 0" },

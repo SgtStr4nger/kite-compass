@@ -16,7 +16,6 @@
       "nearest_airport_code": "SGN",
       "airport_transfer_time": "5 h",
       "transport_note": "About a 4‑5 h drive east of Ho Chi Minh City's Tan Son Nhat International Airport (SGN).",
-      "beginner_friendly": false,
       "spot_types": [],
       "rider_levels": [
         "intermediate"
@@ -43,7 +42,6 @@
       "nearest_airport_code": "",
       "airport_transfer_time": "",
       "transport_note": "",
-      "beginner_friendly": false,
       "spot_types": [],
       "rider_levels": [],
       "vibe_tags": [],
@@ -65,7 +63,6 @@
       "nearest_airport_code": "",
       "airport_transfer_time": "",
       "transport_note": "",
-      "beginner_friendly": true,
       "spot_types": [
         "flat-water",
         "lagoon",
@@ -95,7 +92,6 @@
       "nearest_airport_code": "",
       "airport_transfer_time": "",
       "transport_note": "",
-      "beginner_friendly": false,
       "spot_types": [
         "flat-water",
         "chop"
@@ -126,7 +122,6 @@
       "nearest_airport_code": "PMO",
       "airport_transfer_time": "10 km",
       "transport_note": "accessible via Trapani–Birgi (Vincenzo Florio) Airport (TPS) 10 km away or Palermo Airport (PMO).",
-      "beginner_friendly": true,
       "spot_types": [
         "flat-water",
         "lagoon",
@@ -154,7 +149,6 @@
       "nearest_airport_code": "PAS",
       "airport_transfer_time": "20 min",
       "transport_note": "About 20 min drive from Paros National Airport (PAS) or ferry from Athens.",
-      "beginner_friendly": false,
       "spot_types": [
         "flat-water",
         "chop",
@@ -183,7 +177,6 @@
       "nearest_airport_code": "DLM",
       "airport_transfer_time": "5 h",
       "transport_note": "Fly into Dalaman Airport (DLM) and drive about 1.5 h to Akyaka.",
-      "beginner_friendly": true,
       "spot_types": [
         "flat-water",
         "chop"
@@ -213,7 +206,6 @@
       "nearest_airport_code": "HRG",
       "airport_transfer_time": "30 min",
       "transport_note": "about a 30 min drive north of Hurghada International Airport (HRG).",
-      "beginner_friendly": false,
       "spot_types": [
         "flat-water"
       ],
@@ -242,7 +234,6 @@
       "nearest_airport_code": "HRG",
       "airport_transfer_time": "45 min",
       "transport_note": "Around 45 minutes south of Hurghada International Airport (HRG).",
-      "beginner_friendly": true,
       "spot_types": [
         "flat-water",
         "foil",
@@ -270,7 +261,6 @@
       "nearest_airport_code": "HAV",
       "airport_transfer_time": "30 min",
       "transport_note": "about a 30 min drive east of José Martí International Airport (HAV) in Havana.",
-      "beginner_friendly": false,
       "spot_types": [
         "waves"
       ],
@@ -299,7 +289,6 @@
       "nearest_airport_code": "LEI",
       "airport_transfer_time": "1 h",
       "transport_note": "about 1 h drive from Almería Airport (LEI) or 2.5 h from Málaga Airport (AGP).",
-      "beginner_friendly": false,
       "spot_types": [
         "waves"
       ],
@@ -327,7 +316,6 @@
       "nearest_airport_code": "TLV",
       "airport_transfer_time": "2 h",
       "transport_note": "about a 2 h drive from Ben Gurion Airport (TLV) in Tel Aviv.",
-      "beginner_friendly": false,
       "spot_types": [
         "flat-water"
       ],
@@ -356,7 +344,6 @@
       "nearest_airport_code": "SID",
       "airport_transfer_time": "10 min",
       "transport_note": "5–10 min from Santa Maria and about 20 min from Amílcar Cabral International Airport (SID).",
-      "beginner_friendly": false,
       "spot_types": [
         "flat-water",
         "foil",
@@ -386,7 +373,6 @@
       "nearest_airport_code": "MRU",
       "airport_transfer_time": "1 h",
       "transport_note": "Several kite centres and hotels line the beach at Le Morne, and it’s about a 1 h drive from Sir Seewoosagur Ramgoolam International Airport (MRU).",
-      "beginner_friendly": false,
       "spot_types": [
         "flat-water",
         "lagoon",
@@ -414,7 +400,6 @@
       "nearest_airport_code": "RHO",
       "airport_transfer_time": "5 h",
       "transport_note": "1.5 hr drive from Rhodes International Airport (RHO).",
-      "beginner_friendly": false,
       "spot_types": [
         "flat-water",
         "waves"
@@ -444,7 +429,6 @@
       "nearest_airport_code": "JNX",
       "airport_transfer_time": "20 min",
       "transport_note": "About 20 min drive from Naxos Island National Airport (JNX) or ferry from Paros/Mykonos.",
-      "beginner_friendly": false,
       "spot_types": [
         "flat-water",
         "waves"
@@ -471,7 +455,6 @@
       "nearest_airport_code": "DIE",
       "airport_transfer_time": "30 min",
       "transport_note": "The nearest airport is Antsiranana (Diego Suarez) Airport (DIE) about 30 minutes away by road.",
-      "beginner_friendly": true,
       "spot_types": [
         "flat-water",
         "lagoon",
@@ -501,7 +484,6 @@
       "nearest_airport_code": "JJD",
       "airport_transfer_time": "40 km",
       "transport_note": "fly into Jericoacoara Regional Airport (JJD) 40 km away or Pinto Martins‑Fortaleza (FOR) about 4 hours’ drive.",
-      "beginner_friendly": false,
       "spot_types": [
         "flat-water",
         "lagoon",
@@ -533,7 +515,6 @@
       "nearest_airport_code": "JJD",
       "airport_transfer_time": "30 min",
       "transport_note": "The nearest airport is Jericoacoara Regional Airport (JJD) about 30 min away or Fortaleza Airport (FOR) about 4 hours by road.",
-      "beginner_friendly": false,
       "spot_types": [
         "chop"
       ],
@@ -562,7 +543,6 @@
       "nearest_airport_code": "FOR",
       "airport_transfer_time": "45 min",
       "transport_note": "Nearest airport is Pinto Martins–Fortaleza International Airport (FOR) about 45 minutes away.",
-      "beginner_friendly": true,
       "spot_types": [
         "flat-water",
         "lagoon",
@@ -592,7 +572,6 @@
       "nearest_airport_code": "MRS",
       "airport_transfer_time": "10 min",
       "transport_note": "The nearest airport is Toulon–Hyères Airport (TLN) about 10 min away, or Marseille Airport (MRS) 1.5 h by car.",
-      "beginner_friendly": false,
       "spot_types": [
         "foil"
       ],
@@ -618,7 +597,6 @@
       "nearest_airport_code": "RRG",
       "airport_transfer_time": "45 min",
       "transport_note": "nearest airport is Sir Gaëtan Duval Airport (RRG) about 45 min away via flights from Mauritius.",
-      "beginner_friendly": true,
       "spot_types": [
         "lagoon",
         "waves"
@@ -647,7 +625,6 @@
       "nearest_airport_code": "POP",
       "airport_transfer_time": "30 min",
       "transport_note": "The nearest airport is Gregorio Luperón International Airport (POP) about 30 minutes away.",
-      "beginner_friendly": false,
       "spot_types": [
         "flat-water",
         "waves"
@@ -677,7 +654,6 @@
       "nearest_airport_code": "",
       "airport_transfer_time": "",
       "transport_note": "",
-      "beginner_friendly": false,
       "spot_types": [
         "flat-water",
         "lagoon",
@@ -708,7 +684,6 @@
       "nearest_airport_code": "",
       "airport_transfer_time": "",
       "transport_note": "",
-      "beginner_friendly": true,
       "spot_types": [
         "lagoon"
       ],
@@ -735,7 +710,6 @@
       "nearest_airport_code": "",
       "airport_transfer_time": "",
       "transport_note": "",
-      "beginner_friendly": false,
       "spot_types": [
         "lagoon"
       ],
@@ -764,7 +738,6 @@
       "nearest_airport_code": "",
       "airport_transfer_time": "",
       "transport_note": "",
-      "beginner_friendly": false,
       "spot_types": [],
       "rider_levels": [
         "intermediate"
@@ -791,7 +764,6 @@
       "nearest_airport_code": "",
       "airport_transfer_time": "",
       "transport_note": "Travel by small plane to Cuyo Airport or ferry/flight via Puerto Princesa or Manila.",
-      "beginner_friendly": false,
       "spot_types": [
         "flat-water",
         "lagoon"
@@ -820,7 +792,6 @@
       "nearest_airport_code": "LAO",
       "airport_transfer_time": "2 h",
       "transport_note": "Reachable via Laoag (LAO) or Tuguegarao (TUG) airports, 1–2 h by road.",
-      "beginner_friendly": false,
       "spot_types": [
         "waves"
       ],
@@ -851,7 +822,6 @@
       "nearest_airport_code": "GRJ",
       "airport_transfer_time": "3 h",
       "transport_note": "About 3 h drive from Cape Town or 2 h from George (GRJ) airport.",
-      "beginner_friendly": false,
       "spot_types": [
         "flat-water",
         "chop",
@@ -884,7 +854,6 @@
       "nearest_airport_code": "CPT",
       "airport_transfer_time": "20 min",
       "transport_note": "About 20 min from Cape Town Intl Airport (CPT).",
-      "beginner_friendly": false,
       "spot_types": [
         "chop",
         "waves"
@@ -914,7 +883,6 @@
       "nearest_airport_code": "UNI",
       "airport_transfer_time": "",
       "transport_note": "nearest airport is Union Island (UNI) or flights via Barbados.",
-      "beginner_friendly": false,
       "spot_types": [
         "flat-water",
         "lagoon",
@@ -944,7 +912,6 @@
       "nearest_airport_code": "FDF",
       "airport_transfer_time": "30 min",
       "transport_note": "Located in Le Vauclin on Martinique’s Atlantic side about 30 min from Aime Cesaire Intl Airport (FDF).",
-      "beginner_friendly": true,
       "spot_types": [
         "lagoon",
         "freestyle",
@@ -975,7 +942,6 @@
       "nearest_airport_code": "CPT",
       "airport_transfer_time": "1 h",
       "transport_note": "About 1 h north of Cape Town Intl Airport (CPT).",
-      "beginner_friendly": true,
       "spot_types": [
         "flat-water",
         "lagoon"
@@ -1005,7 +971,6 @@
       "nearest_airport_code": "ZNZ",
       "airport_transfer_time": "",
       "transport_note": "about a 1‑hour drive from Abeid Amani Karume International Airport (ZNZ) in Zanzibar City.",
-      "beginner_friendly": false,
       "spot_types": [
         "lagoon",
         "waves"
@@ -1036,7 +1001,6 @@
       "nearest_airport_code": "VIL",
       "airport_transfer_time": "",
       "transport_note": "Access via Dakhla Airport (VIL) with connections via Casablanca or Agadir.",
-      "beginner_friendly": true,
       "spot_types": [
         "flat-water",
         "lagoon",
@@ -1067,7 +1031,6 @@
       "nearest_airport_code": "CUN",
       "airport_transfer_time": "",
       "transport_note": "Approximately a 45‑min drive south of Cancún International Airport (CUN).",
-      "beginner_friendly": false,
       "spot_types": [
         "lagoon"
       ],
@@ -1095,7 +1058,6 @@
       "nearest_airport_code": "GIB",
       "airport_transfer_time": "5 h",
       "transport_note": "about 1.5 h drive from Málaga Airport (AGP) or 45 min from Gibraltar Airport (GIB).",
-      "beginner_friendly": false,
       "spot_types": [
         "flat-water",
         "chop"
@@ -1124,7 +1086,6 @@
       "nearest_airport_code": "HAM",
       "airport_transfer_time": "5 h",
       "transport_note": "Approximately a 2.5 h drive from Hamburg Airport (HAM).",
-      "beginner_friendly": false,
       "spot_types": [],
       "rider_levels": [
         "intermediate"
@@ -1148,7 +1109,6 @@
       "nearest_airport_code": "DXB",
       "airport_transfer_time": "30 min",
       "transport_note": "About 30 min drive from Dubai International Airport (DXB).",
-      "beginner_friendly": false,
       "spot_types": [],
       "rider_levels": [
         "intermediate"
@@ -1172,7 +1132,6 @@
       "nearest_airport_code": "MPH",
       "airport_transfer_time": "",
       "transport_note": "Reachable via Caticlan Airport (MPH) or Kalibo International Airport (KLO) plus boat transfer.",
-      "beginner_friendly": false,
       "spot_types": [
         "lagoon"
       ],
@@ -1200,7 +1159,6 @@
       "nearest_airport_code": "CMB",
       "airport_transfer_time": "",
       "transport_note": "roughly a 3‑hour drive north of Bandaranaike International Airport (CMB) near Colombo.",
-      "beginner_friendly": false,
       "spot_types": [
         "lagoon"
       ],
@@ -1229,7 +1187,6 @@
       "nearest_airport_code": "PER",
       "airport_transfer_time": "45 min",
       "transport_note": "45 min drive south of Perth and about 50 min from Perth Airport (PER).",
-      "beginner_friendly": true,
       "spot_types": [
         "flat-water",
         "freestyle"
@@ -1258,7 +1215,6 @@
       "nearest_airport_code": "ANU",
       "airport_transfer_time": "",
       "transport_note": "Bird International Airport (ANU) in St.",
-      "beginner_friendly": false,
       "spot_types": [
         "flat-water"
       ],
@@ -1286,7 +1242,6 @@
       "nearest_airport_code": "NAT",
       "airport_transfer_time": "110 km",
       "transport_note": "Around 110 km from São Gonçalo do Amarante – Governador Aluizio Alves International Airport (NAT) in Natal.",
-      "beginner_friendly": false,
       "spot_types": [
         "flat-water",
         "lagoon",
@@ -1317,7 +1272,6 @@
       "nearest_airport_code": "POP",
       "airport_transfer_time": "20 km",
       "transport_note": "Approximately 20 km from Gregorio Luperón International Airport (POP) at Puerto Plata.",
-      "beginner_friendly": false,
       "spot_types": [
         "flat-water",
         "lagoon",
@@ -1347,7 +1301,6 @@
       "nearest_airport_code": "LPA",
       "airport_transfer_time": "20 min",
       "transport_note": "fly into Las Palmas/Gran Canaria Airport (LPA) about 20 min away.",
-      "beginner_friendly": false,
       "spot_types": [
         "chop",
         "waves"
@@ -1376,7 +1329,6 @@
       "nearest_airport_code": "FUE",
       "airport_transfer_time": "1 h",
       "transport_note": "roughly 1 h drive south of Fuerteventura Airport (FUE).",
-      "beginner_friendly": false,
       "spot_types": [
         "lagoon",
         "chop",
@@ -1404,7 +1356,6 @@
       "nearest_airport_code": "FUE",
       "airport_transfer_time": "60 min",
       "transport_note": "About 60 min drive south from Fuerteventura Airport (FUE).",
-      "beginner_friendly": true,
       "spot_types": [
         "flat-water",
         "lagoon",
@@ -1432,7 +1383,6 @@
       "nearest_airport_code": "",
       "airport_transfer_time": "",
       "transport_note": "",
-      "beginner_friendly": false,
       "spot_types": [],
       "rider_levels": [],
       "vibe_tags": [],
@@ -1454,7 +1404,6 @@
       "nearest_airport_code": "ESU",
       "airport_transfer_time": "30 min",
       "transport_note": "About 30 min drive from Essaouira town and Mogador Airport (ESU) or 3 h from Marrakech (RAK).",
-      "beginner_friendly": false,
       "spot_types": [
         "waves"
       ],
@@ -1483,7 +1432,6 @@
       "nearest_airport_code": "ESU",
       "airport_transfer_time": "",
       "transport_note": "reachable via Essaouira‑Mogador Airport (ESU) or a 2‑hour drive from Marrakech Menara Airport (RAK).",
-      "beginner_friendly": false,
       "spot_types": [
         "waves"
       ],
@@ -1509,7 +1457,6 @@
       "nearest_airport_code": "",
       "airport_transfer_time": "",
       "transport_note": "",
-      "beginner_friendly": false,
       "spot_types": [],
       "rider_levels": [],
       "vibe_tags": [],
@@ -1531,7 +1478,6 @@
       "nearest_airport_code": "",
       "airport_transfer_time": "",
       "transport_note": "",
-      "beginner_friendly": false,
       "spot_types": [],
       "rider_levels": [
         "intermediate"
@@ -1555,7 +1501,6 @@
       "nearest_airport_code": "",
       "airport_transfer_time": "",
       "transport_note": "",
-      "beginner_friendly": false,
       "spot_types": [
         "flat-water",
         "waves"
@@ -1585,7 +1530,6 @@
       "nearest_airport_code": "",
       "airport_transfer_time": "",
       "transport_note": "",
-      "beginner_friendly": false,
       "spot_types": [],
       "rider_levels": [
         "intermediate"
@@ -1612,7 +1556,6 @@
       "nearest_airport_code": "",
       "airport_transfer_time": "",
       "transport_note": "",
-      "beginner_friendly": false,
       "spot_types": [],
       "rider_levels": [
         "intermediate"
@@ -1636,7 +1579,6 @@
       "nearest_airport_code": "",
       "airport_transfer_time": "",
       "transport_note": "",
-      "beginner_friendly": false,
       "spot_types": [],
       "rider_levels": [
         "intermediate"
@@ -1662,7 +1604,6 @@
       "nearest_airport_code": "",
       "airport_transfer_time": "",
       "transport_note": "",
-      "beginner_friendly": false,
       "spot_types": [],
       "rider_levels": [
         "intermediate"
@@ -1686,7 +1627,6 @@
       "nearest_airport_code": "PMV",
       "airport_transfer_time": "",
       "transport_note": "access via Santiago Mariño Caribbean International Airport (PMV) on Margarita Island or via Caracas (CCS).",
-      "beginner_friendly": false,
       "spot_types": [
         "freestyle"
       ],
@@ -1714,7 +1654,6 @@
       "nearest_airport_code": "BAQ",
       "airport_transfer_time": "45 min",
       "transport_note": "about 45 min drive from Barranquilla’s Ernesto Cortissoz International Airport (BAQ) or 2 hr from Cartagena’s Rafael Núñez Airport (CTG).",
-      "beginner_friendly": false,
       "spot_types": [
         "waves"
       ],
@@ -1743,7 +1682,6 @@
       "nearest_airport_code": "BVC",
       "airport_transfer_time": "",
       "transport_note": "accessible via Aristides Pereira International Airport (BVC) about a 10‑minute drive from Sal Rei.",
-      "beginner_friendly": false,
       "spot_types": [
         "chop",
         "waves"
@@ -1773,7 +1711,6 @@
       "nearest_airport_code": "MYD",
       "airport_transfer_time": "45 min",
       "transport_note": "about a 45 min drive from Malindi Airport (MYD) or 2 h from Moi International Airport (MBA) in Mombasa.",
-      "beginner_friendly": false,
       "spot_types": [],
       "rider_levels": [
         "intermediate"
@@ -1799,7 +1736,6 @@
       "nearest_airport_code": "FOR",
       "airport_transfer_time": "45 min",
       "transport_note": "about a 45 min drive west of Pinto Martins–Fortaleza International Airport (FOR).",
-      "beginner_friendly": false,
       "spot_types": [
         "lagoon"
       ],
@@ -1825,7 +1761,6 @@
       "nearest_airport_code": "CVQ",
       "airport_transfer_time": "5 h",
       "transport_note": "nearest airports are Carnarvon Airport (CVQ) or Learmonth (LEA) about 3 – 5 hours’ drive.",
-      "beginner_friendly": false,
       "spot_types": [
         "flat-water",
         "waves"
@@ -1854,7 +1789,6 @@
       "nearest_airport_code": "MMY",
       "airport_transfer_time": "",
       "transport_note": "fly to Miyako Airport (MMY) or Shimojishima Airport (SHI) via connections from Naha.",
-      "beginner_friendly": true,
       "spot_types": [
         "waves"
       ],
@@ -1881,7 +1815,6 @@
       "nearest_airport_code": "OKA",
       "airport_transfer_time": "2 km",
       "transport_note": "fly via Naha Airport (OKA) and connect to Kumejima Airport (UEO) about 2 km from the beaches.",
-      "beginner_friendly": false,
       "spot_types": [
         "flat-water",
         "waves"
@@ -1912,7 +1845,6 @@
       "nearest_airport_code": "",
       "airport_transfer_time": "",
       "transport_note": "",
-      "beginner_friendly": false,
       "spot_types": [],
       "rider_levels": [],
       "vibe_tags": [],
@@ -1934,7 +1866,6 @@
       "nearest_airport_code": "",
       "airport_transfer_time": "",
       "transport_note": "",
-      "beginner_friendly": false,
       "spot_types": [],
       "rider_levels": [],
       "vibe_tags": [],
@@ -1956,7 +1887,6 @@
       "nearest_airport_code": "",
       "airport_transfer_time": "",
       "transport_note": "",
-      "beginner_friendly": false,
       "spot_types": [],
       "rider_levels": [
         "intermediate"
@@ -1980,7 +1910,6 @@
       "nearest_airport_code": "",
       "airport_transfer_time": "",
       "transport_note": "",
-      "beginner_friendly": false,
       "spot_types": [
         "waves"
       ],
@@ -2008,7 +1937,6 @@
       "nearest_airport_code": "",
       "airport_transfer_time": "",
       "transport_note": "",
-      "beginner_friendly": false,
       "spot_types": [
         "flat-water",
         "lagoon",
@@ -2038,7 +1966,6 @@
       "nearest_airport_code": "",
       "airport_transfer_time": "",
       "transport_note": "",
-      "beginner_friendly": true,
       "spot_types": [
         "flat-water",
         "lagoon"
@@ -2067,7 +1994,6 @@
       "nearest_airport_code": "WVB",
       "airport_transfer_time": "15 km",
       "transport_note": "fly into Walvis Bay International Airport (WVB) 15 km away or drive 30 min from Swakopmund.",
-      "beginner_friendly": true,
       "spot_types": [
         "flat-water",
         "lagoon"
@@ -2097,7 +2023,6 @@
       "nearest_airport_code": "PIO",
       "airport_transfer_time": "",
       "transport_note": "easiest access via Capitán FAP Renán Elías Olivera Airport (PIO) in Pisco or 3‑hour drive from Lima’s Jorge Chávez International Airport (LIM).",
-      "beginner_friendly": false,
       "spot_types": [
         "flat-water",
         "chop"
@@ -2126,7 +2051,6 @@
       "nearest_airport_code": "CIX",
       "airport_transfer_time": "2 h",
       "transport_note": "Fly into Chiclayo (CIX) or Trujillo (TRU) and drive 2 hours north to Pacasmayo.",
-      "beginner_friendly": false,
       "spot_types": [
         "flat-water",
         "waves"
@@ -2155,7 +2079,6 @@
       "nearest_airport_code": "VIL",
       "airport_transfer_time": "",
       "transport_note": "nearest airport is Dakhla (VIL).",
-      "beginner_friendly": false,
       "spot_types": [
         "flat-water",
         "lagoon",
@@ -2185,7 +2108,6 @@
       "nearest_airport_code": "VIL",
       "airport_transfer_time": "",
       "transport_note": "nearest airport is Dakhla (VIL).",
-      "beginner_friendly": false,
       "spot_types": [
         "flat-water",
         "lagoon",

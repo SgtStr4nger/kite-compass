@@ -59,7 +59,7 @@ export default function AdminSpotEditor() {
     googleMapsUrl: "", windyUrl: "", windfinderUrl: "",
     destinationSummary: "", destinationDescription: "", kiteContextDescription: "", teaserText: "",
     heroImageUrl: "", nearestAirportName: "", nearestAirportCode: "", airportTransferTime: "", transportNote: "",
-    beginnerFriendly: false, spotTypes: [], riderLevels: [], vibeTags: [],
+    spotTypes: [], riderLevels: [], vibeTags: [],
     seoTitleOverride: "", seoDescriptionOverride: "",
     sourceNotes: "", internalNotes: "", rankingMode: "auto",
     published: false, hasDraft: true,
@@ -391,10 +391,6 @@ export default function AdminSpotEditor() {
           <TagGroup label="Spot types" options={SPOT_TYPES} selected={form.spotTypes || []} onToggle={v => toggleArr("spotTypes", v)} testid="spottype" />
           <TagGroup label="Rider levels" options={RIDER_LEVELS} selected={form.riderLevels || []} onToggle={v => toggleArr("riderLevels", v)} testid="riderlevel" />
           <TagGroup label="Travel vibe" options={VIBE_TAGS} selected={form.vibeTags || []} onToggle={v => toggleArr("vibeTags", v)} testid="vibe" />
-          <div className="flex items-center gap-2 pt-1">
-            <Checkbox id="beg" checked={!!form.beginnerFriendly} onCheckedChange={c => set("beginnerFriendly", !!c)} data-testid="input-beginner" />
-            <Label htmlFor="beg" className="cursor-pointer">Beginner friendly</Label>
-          </div>
         </Section>
 
         {/* Travel */}

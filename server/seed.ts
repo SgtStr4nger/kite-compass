@@ -27,12 +27,8 @@ async function run() {
       options: JSON.stringify(["beginner", "intermediate", "advanced"]), isPublic: true, sortOrder: 2 },
     { key: "vibeTags", label: "Travel vibe", field: "vibe_tags", type: "multiselect",
       options: JSON.stringify(["city", "town", "village", "remote", "touristy", "local-scene", "family-friendly", "nightlife"]), isPublic: true, sortOrder: 3 },
-    { key: "beginnerFriendly", label: "Beginner friendly", field: "beginner_friendly", type: "boolean",
-      options: "[]", isPublic: true, sortOrder: 4 },
     { key: "windTypes", label: "Wind type", field: "primary_wind_type", type: "multiselect",
-      options: JSON.stringify(["Onshore", "Side-on", "Side-shore", "Side-off", "Offshore"]), isPublic: true, sortOrder: 5 },
-    { key: "waterStates", label: "Water state", field: "water_states", type: "multiselect",
-      options: JSON.stringify(["Flat", "Choppy", "Wave", "Mixed"]), isPublic: true, sortOrder: 6 },
+      options: JSON.stringify(["Onshore", "Side-on", "Side-shore", "Side-off", "Offshore"]), isPublic: true, sortOrder: 4 },
   ];
   for (const d of defs) {
     const ex = db.select().from(filterDefs).where(eq(filterDefs.key, d.key)).get();
@@ -58,11 +54,9 @@ async function run() {
       nearestAirportCode: s.nearest_airport_code || "",
       airportTransferTime: s.airport_transfer_time || "",
       transportNote: s.transport_note || "",
-      beginnerFriendly: !!s.beginner_friendly,
       spotTypes: JSON.stringify(s.spot_types || []),
       riderLevels: JSON.stringify(s.rider_levels || []),
       vibeTags: JSON.stringify(s.vibe_tags || []),
-      waterStates: JSON.stringify(s.water_states || []),
       internalNotes: "", sourceNotes: s.source_notes || "",
       rankingMode: "manual",
       published: true, hasDraft: false,

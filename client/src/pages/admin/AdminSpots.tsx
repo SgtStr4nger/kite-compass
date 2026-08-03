@@ -4,7 +4,7 @@ import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
 import { AdminLayout } from "./AdminLayout";
 import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AdminSpotListItem, ExcelImportAction, ExcelImportHistoryItem, ExcelImportPreviewResponse } from "@/lib/types";
@@ -22,10 +22,14 @@ function DataPill({ status }: { status?: "fresh" | "dirty" | "missing" }) {
   if (status === "dirty") return <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700"><BadgeInfo className="h-3.5 w-3.5" /> Dirty</span>;
   return <span className="inline-flex items-center gap-1 text-xs font-medium text-rose-700"><Circle className="h-3.5 w-3.5" /> Missing</span>;
 }
-function toDataUrl(base64: string) { return `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${base64}`; }
+function toDataUrl(fileName: string, base64: string) {
+  const lower = fileName.toLowerCase();
+  const mime = lower.endsWith(".json") ? "application/json" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  return `data:${mime};base64,${base64}`;
+}
 function downloadBase64(fileName: string, base64: string) {
   const link = document.createElement("a");
-  link.href = toDataUrl(base64);
+  link.href = toDataUrl(fileName, base64);
   link.download = fileName;
   link.click();
 }
@@ -71,7 +75,7 @@ export default function AdminSpots() {
       .catch(() => {});
   }, [token, preview]);
 
-  const exportRows = async (scope: "selected" | "filtered" | "all" | "template") => {
+  const exportRows = async (scope: "selected" | "filtered" | "all") => {
     try {
       const out = await api<{ fileName: string; fileBase64: string }>("POST", "/api/admin/excel/export/spots", {
         scope,
@@ -87,9 +91,9 @@ export default function AdminSpots() {
   const exportPrimaryScope: "all" | "filtered" | "selected" =
     selectedIds.length > 0 ? "selected" : (filtersActive ? "filtered" : "all");
   const exportPrimaryLabel =
-    exportPrimaryScope === "selected" ? "Export selected"
-      : exportPrimaryScope === "filtered" ? "Export filtered"
-        : "Export all";
+    exportPrimaryScope === "selected" ? "Export selected JSON"
+      : exportPrimaryScope === "filtered" ? "Export filtered JSON"
+        : "Export all JSON";
 
   const publishBulk = async (mode: "content" | "weather" | "content-weather") => {
     const targetIds = selectedIds.length ? selectedIds : filteredIds;
@@ -182,8 +186,6 @@ export default function AdminSpots() {
                 {selectedIds.length > 0 && <DropdownMenuItem onClick={() => exportRows("selected")}>Export selected</DropdownMenuItem>}
                 {filtersActive && <DropdownMenuItem onClick={() => exportRows("filtered")}>Export filtered</DropdownMenuItem>}
                 <DropdownMenuItem onClick={() => exportRows("all")}>Export all</DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => exportRows("template")}>Template</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -205,14 +207,14 @@ export default function AdminSpots() {
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
-          <Input type="file" accept=".xlsx" className="max-w-xs" disabled={importBusy} onChange={e => void onUpload(e.target.files?.[0] ?? null)} />
+          <Input type="file" accept=".json,application/json" className="max-w-xs" disabled={importBusy} onChange={e => void onUpload(e.target.files?.[0] ?? null)} />
         </div>
         {preview && (
           <div className="rounded border border-border p-3 text-sm">
             <div className="mb-2">Preview — New: {preview.summary.newCount}, Update: {preview.summary.updateCount}, Error ID not found: {preview.summary.errorIdNotFoundCount}, Error invalid data: {preview.summary.errorInvalidDataCount}</div>
             <div className="mb-2 flex flex-wrap gap-2">
-              <Button size="sm" variant="outline" onClick={() => downloadBase64(preview.files.updatesFileName, preview.files.updatesFileBase64)}>updates.xlsx</Button>
-              <Button size="sm" variant="outline" onClick={() => downloadBase64(preview.files.errorsFileName, preview.files.errorsFileBase64)}>errors.xlsx</Button>
+              <Button size="sm" variant="outline" onClick={() => downloadBase64(preview.files.updatesFileName, preview.files.updatesFileBase64)}>{preview.files.updatesFileName}</Button>
+              <Button size="sm" variant="outline" onClick={() => downloadBase64(preview.files.errorsFileName, preview.files.errorsFileBase64)}>{preview.files.errorsFileName}</Button>
             </div>
             <div className="flex flex-wrap gap-2">
               <Button size="sm" disabled={importBusy} onClick={() => void commitImport("create_update")}>Create new & update existing</Button>

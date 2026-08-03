@@ -12,7 +12,6 @@ export function filtersToParams(f: FilterState): URLSearchParams {
   (f.riderLevel ?? []).forEach(v => p.append("riderLevel", v));
   (f.vibe ?? []).forEach(v => p.append("vibe", v));
   (f.windType ?? []).forEach(v => p.append("windType", v));
-  (f.waterState ?? []).forEach(v => p.append("waterState", v));
   if (f.windMin != null) p.set("windMin", String(f.windMin));
   if (f.windMax != null) p.set("windMax", String(f.windMax));
   return p;
@@ -33,7 +32,6 @@ export function paramsToFilters(search: string): FilterState {
     riderLevel: p.getAll("riderLevel"),
     vibe: p.getAll("vibe"),
     windType: p.getAll("windType"),
-    waterState: p.getAll("waterState"),
     windMin: windMinStr != null ? Number(windMinStr) : null,
     windMax: windMaxStr != null ? Number(windMaxStr) : null,
   };
