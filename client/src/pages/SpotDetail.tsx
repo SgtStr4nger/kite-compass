@@ -496,7 +496,10 @@ function MonthlyChart({
     <div className="rounded-2xl border border-card-border bg-card p-4">
       <div className="mb-2 text-sm font-medium text-foreground">{title}</div>
       <ResponsiveContainer width="100%" height={120}>
-        <AreaChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: -16 }}>
+        {/* right margin ≥ 10 keeps the December highlight band (which extends
+            10px past December's center) inside the SVG viewport; the negative
+            left margin gives the January band matching room on the other side. */}
+        <AreaChart data={data} margin={{ top: 4, right: 14, bottom: 0, left: -16 }}>
           <defs>
             <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
               <stop offset="5%" stopColor="#2d8290" stopOpacity={0.4} />
