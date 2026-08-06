@@ -5,6 +5,9 @@ on:
 
 permissions:
   id-token: write
+  contents: write
+  pull-requests: write
+  issues: write
 
 concurrency:
   group: opencode-${{ github.event.issue.number }}
@@ -24,9 +27,11 @@ jobs:
       - uses: anomalyco/opencode/github@latest
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           model: opencode/deepseek-v4-flash-free
           agent: analyzer
+          use_github_token: true
           share: true
 
   plan:
@@ -42,9 +47,11 @@ jobs:
       - uses: anomalyco/opencode/github@latest
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           model: opencode/deepseek-v4-flash-free
           agent: planner
+          use_github_token: true
           share: true
 
   implement:
@@ -60,7 +67,9 @@ jobs:
       - uses: anomalyco/opencode/github@latest
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           model: opencode/deepseek-v4-flash-free
           agent: implementer
+          use_github_token: true
           share: true
