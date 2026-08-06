@@ -39,6 +39,48 @@ Kite Compass: kitesurf destination ranking site (React + Vite + Tailwind/shadcn 
 - Path aliases (tsconfig + Vite): `@/*` → `client/src/*`, `@shared/*` → `shared/*`.
 - API calls go through `client/src/lib/api.ts` (Bearer token held in module memory, never localStorage; token refresh via `x-auth-token` response header).
 
+## GitHub issue triage (status labels)
+
+The issue-driven pipeline (`ticket-creator` → `planner` → `implementer`, plus `orchestrator` for batch planning; all in `.opencode/agents/`) uses `status:*` labels as the single source of truth for who owns an issue. Every bot reads the labels to find the tickets meant for it and flips them so the next bot knows it is their turn. **Never rely on the issue being assigned to a user — the `status:*` label is the authority.**
+
+Round-trip lifecycle:
+
+```
+new ticket ─► status:needs-planner ─► status:planner-working ─► status:needs-implementer ─► status:implementer-working ─► status:needs-review ─► status:done (close)
+                 ▲        │                                      ▲                                  │
+                 │        └─────► status:blocked ◄──────┐        └──────────── implementer hand-back: status:needs-planner ────┘
+                 │                                       │
+                 └──── human answers, planner resumes ───┘
+```
+
+| Label | Meaning / who acts | Set by |
+| --- | --- | --- |
+| `status:needs-planner` | Planner must analyze/plan (fresh ticket, or hand-back from implementer) | ticket-creator, implementer |
+| `status:planner-working` | Planner is actively working | planner, orchestrator |
+| `status:blocked` | Needs human/product input (open questions); no bot can proceed | planner |
+| `status:needs-implementer` | Plan posted & approved; implementer's turn | planner, orchestrator |
+| `status:implementer-working` | Implementer is actively building | implementer |
+| `status:needs-review` | Implementation done (PR open); planner reviews | implementer |
+| `status:done` | Reviewed & complete; safe to close | planner |
+
+Rules for every agent:
+
+- Pick up only issues whose `status:*` label matches your role. Skip the rest.
+- When you start an issue, set the matching `-working` label (unless it already says `-working` for you).
+- When you finish, set the **next owner's** label so the hand-off is automatic.
+- Hand-backs: implementer returns a ticket to the planner with `status:needs-planner`; a planner who wants changes after review returns it to the implementer with `status:needs-implementer`; open product questions become `status:blocked`.
+- `PATCH /repos/{owner}/{repo}/issues/{number}` **replaces the whole label list**. Read the current labels first, drop the old `status:*` one, add the new one, and never touch `type:*`/`area:*` labels.
+- Status labels are auto-created the first time they are assigned via the API; if one is ever missing, create it with `POST /repos/{owner}/{repo}/labels` (`{"name": "status:xxx", "color": "..."}`).
+
+Update-labels helper (PowerShell; OWNER/REPO from `git remote get-url origin`):
+
+```powershell
+$issue = curl -s -H "Authorization: token ${GH_TOKEN}" "https://api.github.com/repos/{OWNER}/{REPO}/issues/{NUMBER}" | ConvertFrom-Json
+$labels = ($issue.labels.name | Where-Object { $_ -notlike "status:*" }) + "status:NEW_VALUE"
+$body = @{ labels = $labels } | ConvertTo-Json
+curl -s -X PATCH -H "Authorization: token ${GH_TOKEN}" -H "Accept: application/vnd.github+json" -H "Content-Type: application/json" -d $body "https://api.github.com/repos/{OWNER}/{REPO}/issues/{NUMBER}"
+```
+
 ## Repo-specific workflow
 
 - The product spec (`Kite-Compas - specs v1.txt`) and `WORK_PACKAGE_PLAN.md` are **gitignored in this repo** and their authoritative copies live in the sibling git worktree `kite-compass.worktrees/kite-compass-spec-review-and-steps`. The work plan drives package-by-package implementation — read package scope from the spec, validate with `npm run check`/`npm run build`, and update the plan file when done.

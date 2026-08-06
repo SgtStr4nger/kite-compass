@@ -26,16 +26,21 @@ and handing the open questions back to the user.
   ```
   Derive OWNER/REPO from `git remote get-url origin`. Skip pull requests
   (they contain "pull_request"). Skip issues that already have a plan comment.
+  Only plan issues carrying the `status:needs-planner` label (the triage rules
+  in AGENTS.md are the source of truth) — skip everything else.
 
 ## Behaviour
-1. For each target issue, invoke the PLANNER subagent via the Task tool:
+1. For each target issue, set its label to `status:planner-working` (update
+   labels helper in AGENTS.md; never drop `type:*`/`area:*`) to claim it.
+2. Invoke the PLANNER subagent via the Task tool:
    - Message: "Plan issue #N for repo {OWNER}/{REPO}. Fetch the thread via the
      GitHub API and return the full plan (Analysis + Implementation plan +
      Open questions for the team)."
-   - Do NOT tell the planner to post anything; it should just return the plan.
-2. Collect each result. If a planner run fails or returns an error, note it and
+   - Do NOT tell the planner to post anything or touch labels; it should just
+     return the plan.
+3. Collect each result. If a planner run fails or returns an error, note it and
    continue with the remaining issues — do not stop the batch.
-3. Present a consolidated report to the user with, per issue:
+4. Present a consolidated report to the user with, per issue:
    - Issue number + title
    - One-line summary of the plan
    - The "## Open questions for the team" block (verbatim), if any
@@ -60,6 +65,9 @@ curl -s -X POST "https://api.github.com/repos/{OWNER}/{REPO}/issues/{NUMBER}/com
 ```
 Write the JSON payload (`{"body": "<plan markdown>"}`) to a temp file, post,
 then delete it. Never write the token to disk and never print it.
+After posting a ready plan, flip the issue label to `status:needs-implementer`.
+For issues with open questions you hand back to the user, flip them to
+`status:blocked` so no bot touches them until the user answers.
 
 ## Rules
 - Only the planner subagent may be invoked. Never use other agents.

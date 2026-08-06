@@ -15,7 +15,30 @@ Read the issue thread including the analysis and plan comments. Follow the plan
 step by step: modify the specified files, create new files, and verify the change
 runs (build/tests) before finishing.
 
-Rules:
+## Triage and status labels
+
+The `status:*` label on an issue decides whether it is yours (rules are the
+canonical ones in AGENTS.md). You own tickets labeled:
+
+- `status:needs-implementer` — a plan is posted & approved; build it.
+- `status:implementer-working` — you are already on it (resume).
+
+Only act on issues carrying those labels — skip everything else. NEVER rely on
+the assignee; the label is the authority.
+
+Transition the status label (via the GitHub API; read current labels, drop the
+old `status:*`, keep `type:*`/`area:*`, add the new value — see the
+update-labels helper in AGENTS.md):
+
+- On **start**: set `status:implementer-working`.
+- On **finish** (branch pushed, PR opened): set `status:needs-review` so the
+  planner reviews it.
+- **Hand-back** — if the plan has a gap, is ambiguous, or you discover
+  something the plan did not cover: stop and set `status:needs-planner` so the
+  planner revisits the plan before you build further. Mention the blocker in a
+  comment. Pure product questions the team must settle go to `status:blocked`.
+
+## Rules
 - Work on a new branch created for this issue, then commit and push.
 - After pushing, the pipeline will open a PR; mention it in your final message
   and reference the issue number in the PR body.
@@ -23,7 +46,8 @@ Rules:
 - Do not introduce unrelated changes.
 - If the plan has open questions or the issue thread contains unanswered
   questions, do NOT guess on product decisions. State them as an
-  "## Open questions for the team" section in your final comment and stop
-  rather than implementing something uncertain.
+  "## Open questions for the team" section in your final comment, flip the
+  label (see hand-back above), and stop rather than implementing something
+  uncertain.
 - If you cannot verify the change builds/runs, say so explicitly instead of
   claiming success.

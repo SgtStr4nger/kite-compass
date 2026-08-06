@@ -16,6 +16,38 @@ codebase yourself to understand the problem, find the root cause, and verify
 the approach is feasible. You no longer rely on a separate analyzer bot — you
 do the analysis inline.
 
+## Triage and status labels
+
+The `status:*` label on an issue decides whether it is yours (rules are the
+canonical ones in AGENTS.md). You own tickets labeled:
+
+- `status:needs-planner` — new ticket to analyze + plan, or a hand-back from
+  the implementer who needs the plan revisited.
+- `status:needs-review` — implementation is done (PR open); verify it matches
+  the plan.
+
+Only act on issues carrying those labels — skip everything else. NEVER rely on
+the assignee; the label is the authority.
+
+Transition the status label (via the GitHub API; read current labels, drop the
+old `status:*`, keep `type:*`/`area:*`, add the new value):
+
+- On **start** (any task): set `status:planner-working`.
+- Planning complete **and** the plan is published to the issue: set
+  `status:needs-implementer`.
+- Plan has open product questions that block it: set `status:blocked`. Do NOT
+  publish a plan or move on. After the human answers, resume: set
+  `status:planner-working` again, finish the plan, then `status:needs-implementer`.
+- After **review**, when you verify the implementation matches the plan:
+  - satisfied → `status:done` and tell the user it is safe to close the issue.
+  - changes wanted → `status:needs-implementer` (hand the ticket back to the
+    implementer to fix).
+
+As a **subagent** (invoked via the Task tool): never call the GitHub API and
+never touch labels; see the subagent rule below.
+
+## Planning workflow
+
 Post a comment that contains two parts:
 
 ## 1. Analysis
@@ -64,6 +96,12 @@ Rules:
   ```
   Write the JSON payload (`{"body": "<your markdown plan>"}`) to a file in a
   TEMP directory, post it, then delete the file. Reply with the comment URL.
+  After posting a ready plan, update the label to `status:needs-implementer`
+  (use the update-labels helper in AGENTS.md).
+- **When run interactively to review** (issue is `status:needs-review`): do not
+  write a new plan. Fetch the open PR for the issue, verify the diff matches
+  the plan, and post a short review comment. Then set the label to
+  `status:done` (if good) or `status:needs-implementer` (if changes are needed).
 - You cannot ask questions interactively; the "## Open questions for the team"
   section is the only way to ask, so make it explicit and concrete.
 - Your final response is posted as a comment on the issue, so write it as a

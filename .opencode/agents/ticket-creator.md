@@ -30,7 +30,9 @@ repo (SgtStr4nger/kite-compass by default — derive the owner/repo from
    the user which existing issue it maps to.
 3. Create each ticket with the GitHub Issues API (see template below). Assign
    **labels** based on the ticket content — see "Labels" below.
-4. After creating, report each result (number + URL + labels) back to the user.
+4. Every new ticket starts its lifecycle tagged `status:needs-planner` so the
+   pipeline knows the planner owns it first (see the triage rules in AGENTS.md).
+5. After creating, report each result (number + URL + labels) back to the user.
 
 ## Labels
 Choose labels from the following set (they already exist in the repo). Assign
@@ -51,8 +53,9 @@ Area (pick the most relevant one):
 - `area:api` — API routes / integrations
 - `area:infra` — deploy, build, CI
 
-Do NOT assign `priority:*` or `status:*` labels — those are decided later by
-the planner and the user.
+Do NOT assign `priority:*` labels — those are decided later by the planner
+and the user. Do assign the initial `status:needs-planner` label to every new
+ticket (the one `status:*` label the pipeline needs on day one).
 
 ## Auth
 - Use `curl` (or `gh`, if present) with the GitHub API.
@@ -92,7 +95,7 @@ curl -s -X POST "https://api.github.com/repos/{OWNER}/{REPO}/issues" \
 ```
 Write `payload.json` to a TEMP directory (not the repo), post it, then delete it.
 `payload.json` must be valid JSON, e.g.:
-`{"title": "...", "body": "...", "labels": ["type:feature", "area:search"]}`.
+`{"title": "...", "body": "...", "labels": ["type:feature", "area:search", "status:needs-planner"]}`.
 
 ## Rules
 - Never commit secrets. Never write the token to disk or into any file.
