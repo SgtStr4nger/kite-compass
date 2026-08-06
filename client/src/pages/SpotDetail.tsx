@@ -448,6 +448,26 @@ function WhenItWorksBest({
 // ── Monthly chart (area + axes, spec §10.2) ──────────────────────────────────
 type ChartDataPoint = { month: string; value: number | null; selected: boolean };
 
+// Custom shape for the multi-month highlight band. ReferenceArea resolves its
+// x1/x2 to category centers (AreaChart uses a point scale, which has no band
+// width), so we extend the computed rect by the classic stripe's half-width on
+// each side. This joins adjacent selected months into one uniform band that
+// keeps exactly the same outer borders as the old 20px ReferenceLine stripes.
+function HighlightBandShape(props: any) {
+  const { x, y, width, height, fill, fillOpacity } = props;
+  const halfStripe = 10;
+  return (
+    <rect
+      x={x - halfStripe}
+      y={y}
+      width={width + halfStripe * 2}
+      height={height}
+      fill={fill}
+      fillOpacity={fillOpacity}
+    />
+  );
+}
+
 function MonthlyChart({
   title, unit, data, yTicks, yDomain,
 }: {
@@ -484,32 +504,30 @@ function MonthlyChart({
             </linearGradient>
           </defs>
           <CartesianGrid vertical={false} stroke="hsl(var(--border))" strokeDasharray="3 3" />
-          {/* Selected-month highlight bands: the classic 20px stripes stay on the
-              outer edges of each run (single months keep exactly the old look),
-              while a fill joins adjacent months together without moving those edges. */}
+          {/* Selected-month highlight bands: single months keep the classic
+              20px stripe; runs of adjacent months render as one uniform band
+              that keeps the exact same outer borders (no overlap). */}
           {selectedRuns.map(([start, end], i) =>
-            start === end ? null : (
+            start === end ? (
+              <ReferenceLine
+                key={`band-${i}`}
+                x={data[start].month}
+                stroke="hsl(var(--primary))"
+                strokeOpacity={0.15}
+                strokeWidth={20}
+              />
+            ) : (
               <ReferenceArea
                 key={`band-${i}`}
                 x1={data[start].month}
                 x2={data[end].month}
                 fill="hsl(var(--primary))"
                 fillOpacity={0.15}
+                ifOverflow="visible"
+                shape={HighlightBandShape}
               />
             )
           )}
-          {selectedRuns.flatMap(([start, end], i) => {
-            const edgeIdx = start === end ? [start] : [start, end];
-            return edgeIdx.map(idx => (
-              <ReferenceLine
-                key={`edge-${i}-${idx}`}
-                x={data[idx].month}
-                stroke="hsl(var(--primary))"
-                strokeOpacity={0.15}
-                strokeWidth={20}
-              />
-            ));
-          })}
           <XAxis
             dataKey="month"
             tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
