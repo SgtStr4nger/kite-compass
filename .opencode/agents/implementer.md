@@ -3,7 +3,7 @@ description: Implements the plan, creates a branch and opens a PR
 mode: primary
 model: opencode-go/deepseek-v4-flash
 temperature: 0.2
-steps: 25
+steps: 38
 permission:
   edit: allow
   bash: allow

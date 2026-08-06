@@ -4,7 +4,7 @@ mode: all
 model: opencode-go/deepseek-v4-flash
 reasoningEffort: max
 temperature: 0.1
-steps: 30
+steps: 45
 permission:
   edit: deny
   bash: allow

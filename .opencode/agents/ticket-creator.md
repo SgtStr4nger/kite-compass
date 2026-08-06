@@ -3,7 +3,7 @@ description: Turns raw ideas into structured GitHub issues (local, reads GH_TOKE
 mode: primary
 model: opencode-go/deepseek-v4-flash
 temperature: 0.2
-steps: 20
+steps: 30
 permission:
   edit: allow
   bash: allow
