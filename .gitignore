@@ -15,6 +15,7 @@ data.db-journal
 *.log
 .DS_Store
 Kite-Compas - specs v1.txt
+kite-compass-exhaustive-specification-v1.2.md
 ideas.md
 .github/instructions/perplexity-mcp.instructions.md
 WORK_PACKAGE_PLAN.md
