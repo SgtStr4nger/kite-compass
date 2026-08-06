@@ -3,7 +3,7 @@ import { useRoute, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, ResponsiveContainer,
-  ReferenceLine,
+  ReferenceArea, ReferenceLine,
 } from "recharts";
 import { SiteLayout } from "@/components/SiteChrome";
 import { SpotMap } from "@/components/SpotMap";
@@ -23,7 +23,7 @@ export default function SpotDetail() {
   const [, params] = useRoute("/spots/:slug");
   const slug = params?.slug;
   const preview = new URLSearchParams(getHashSearch()).get("preview") === "1";
-  const selectedMonth = new URLSearchParams(getHashSearch()).get("month");
+  const selectedMonths = new URLSearchParams(getHashSearch()).getAll("month");
 
   const { data: spot, isLoading, error } = useQuery<SpotDetailT>({
     queryKey: [`/api/spots/slug/${slug}${preview ? "?preview=1" : ""}`],
@@ -59,13 +59,16 @@ export default function SpotDetail() {
 
   const activeRec = useMemo(() => {
     if (!spot) return null;
-    if (selectedMonth) return spot.monthly.find(m => m.month === selectedMonth) ?? null;
-    // otherwise the best weather-scoring month
-    const scored = [...spot.monthly].sort((a, b) => {
+    // Restrict to the selected months when the search filter has any;
+    // otherwise fall back to the best weather-scoring month overall.
+    const candidates = selectedMonths.length > 0
+      ? spot.monthly.filter(m => selectedMonths.includes(m.month))
+      : spot.monthly;
+    const scored = [...candidates].sort((a, b) => {
       return (resolveMonthlyScore(b, spot.rankingMode) ?? -1) - (resolveMonthlyScore(a, spot.rankingMode) ?? -1);
     });
     return scored[0] ?? null;
-  }, [spot, selectedMonth]);
+  }, [spot, selectedMonths]);
 
   if (isLoading) {
     return <SiteLayout><div className="mx-auto max-w-5xl px-5 py-10"><Skeleton className="h-80 w-full rounded-2xl" /><Skeleton className="mt-6 h-8 w-1/2" /><Skeleton className="mt-3 h-40 w-full" /></div></SiteLayout>;
@@ -113,12 +116,12 @@ export default function SpotDetail() {
                   {[spot.region, spot.country].filter(Boolean).join(", ") || "—"}
                 </div>
               </div>
-              {activeScore != null && (
+              {activeScore != null && activeRec && (
                 <div className="flex items-center gap-3 rounded-xl bg-white/10 p-3 backdrop-blur">
                   <ScoreBadge score={activeScore} size="lg" />
                   <div className="text-white">
                     <div className="text-xs uppercase tracking-wide text-white/70">Kite Compass score</div>
-                    <div className="text-sm">{selectedMonth ? `in ${selectedMonth}` : "best month"}</div>
+                    <div className="text-sm">{activeScore.toFixed(1)} · {activeRec.month}</div>
                   </div>
                 </div>
               )}
@@ -176,7 +179,7 @@ export default function SpotDetail() {
             )}
 
             {/* When it works best */}
-            <WhenItWorksBest monthly={monthlySorted} selectedMonth={selectedMonth} rankingMode={spot.rankingMode} />
+            <WhenItWorksBest monthly={monthlySorted} selectedMonths={selectedMonths} rankingMode={spot.rankingMode} />
           </div>
 
           {/* sidebar */}
@@ -300,10 +303,10 @@ function LinkedGroup({ title, items }: { title: string; items: { name: string; n
 
 // ── "When it works best" — season strip + two charts + 12-month table ──
 function WhenItWorksBest({
-  monthly, selectedMonth, rankingMode,
+  monthly, selectedMonths, rankingMode,
 }: {
   monthly: MonthlyRecord[];
-  selectedMonth: string | null;
+  selectedMonths: string[];
   rankingMode: string;
 }) {
   const byMonth = new Map(monthly.map(m => [m.month, m]));
@@ -333,7 +336,7 @@ function WhenItWorksBest({
           {MONTHS.map((m, i) => {
             const rec = rows[i];
             const meta = rec ? SEASON_META[rec.seasonLabel] : undefined;
-            const on = selectedMonth === m;
+            const on = selectedMonths.includes(m);
             return (
               <div key={m} className="flex-1 text-center" title={rec ? `${m} · ${meta?.label ?? rec.seasonLabel}` : m}>
                 <div className={`h-8 rounded-md ${meta ? meta.dot : "bg-stone-200"} ${on ? "ring-2 ring-offset-1 ring-foreground/60" : ""}`} />
@@ -359,7 +362,7 @@ function WhenItWorksBest({
           data={rows.map((r, i) => ({
             month: MONTHS[i].slice(0, 3),
             value: r ? (r.avgKiteableWind10mKnots ?? r.averageBaseWind ?? null) : null,
-            selected: selectedMonth === MONTHS[i],
+            selected: selectedMonths.includes(MONTHS[i]),
           }))}
           yTicks={[0, 10, 20, 30, 40]}
           yDomain={[0, "auto"]}
@@ -370,7 +373,7 @@ function WhenItWorksBest({
           data={rows.map((r, i) => ({
             month: MONTHS[i].slice(0, 3),
             value: r ? (r.kiteableDaysCount ?? r.windDays ?? null) : null,
-            selected: selectedMonth === MONTHS[i],
+            selected: selectedMonths.includes(MONTHS[i]),
           }))}
           yTicks={[0, 10, 20]}
           yDomain={[0, 31]}
@@ -396,7 +399,7 @@ function WhenItWorksBest({
           <tbody>
             {MONTHS.map((m, i) => {
               const r = rows[i];
-              const on = selectedMonth === m;
+              const on = selectedMonths.includes(m);
               const totalCols = 6 + (hasWindType ? 1 : 0) + (hasWaves ? 1 : 0) + (hasWavePeriod ? 1 : 0);
               if (!r) {
                 return (
@@ -445,6 +448,26 @@ function WhenItWorksBest({
 // ── Monthly chart (area + axes, spec §10.2) ──────────────────────────────────
 type ChartDataPoint = { month: string; value: number | null; selected: boolean };
 
+// Custom shape for the multi-month highlight band. ReferenceArea resolves its
+// x1/x2 to category centers (AreaChart uses a point scale, which has no band
+// width), so we extend the computed rect by the classic stripe's half-width on
+// each side. This joins adjacent selected months into one uniform band that
+// keeps exactly the same outer borders as the old 20px ReferenceLine stripes.
+function HighlightBandShape(props: any) {
+  const { x, y, width, height, fill, fillOpacity } = props;
+  const halfStripe = 10;
+  return (
+    <rect
+      x={x - halfStripe}
+      y={y}
+      width={width + halfStripe * 2}
+      height={height}
+      fill={fill}
+      fillOpacity={fillOpacity}
+    />
+  );
+}
+
 function MonthlyChart({
   title, unit, data, yTicks, yDomain,
 }: {
@@ -455,8 +478,16 @@ function MonthlyChart({
   yDomain: [number | string, number | string];
 }) {
   const xLabels = new Set(["Jan", "Apr", "Jul", "Oct"]);
-  // Selected month indices for reference lines.
-  const selectedMonths = data.map((d, i) => (d.selected ? i : -1)).filter(i => i >= 0);
+  // Selected month indices for highlight bands.
+  const selectedIndices = data.map((d, i) => (d.selected ? i : -1)).filter(i => i >= 0);
+  // Group contiguous selected indices into runs so that adjacent selected months
+  // render as one continuous band instead of separate, gap-y stripes.
+  const selectedRuns: Array<[number, number]> = [];
+  for (const idx of selectedIndices) {
+    const last = selectedRuns[selectedRuns.length - 1];
+    if (last && idx === last[1] + 1) last[1] = idx;
+    else selectedRuns.push([idx, idx]);
+  }
   // Gradient ids must not contain spaces, otherwise the `url(#...)` fill
   // reference fails to resolve and the area falls back to a dark fill.
   const gradId = `grad-${title.replace(/\s+/g, "")}`;
@@ -465,7 +496,10 @@ function MonthlyChart({
     <div className="rounded-2xl border border-card-border bg-card p-4">
       <div className="mb-2 text-sm font-medium text-foreground">{title}</div>
       <ResponsiveContainer width="100%" height={120}>
-        <AreaChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: -16 }}>
+        {/* right margin ≥ 10 keeps the December highlight band (which extends
+            10px past December's center) inside the SVG viewport; the negative
+            left margin gives the January band matching room on the other side. */}
+        <AreaChart data={data} margin={{ top: 4, right: 14, bottom: 0, left: -16 }}>
           <defs>
             <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
               <stop offset="5%" stopColor="#2d8290" stopOpacity={0.4} />
@@ -473,16 +507,30 @@ function MonthlyChart({
             </linearGradient>
           </defs>
           <CartesianGrid vertical={false} stroke="hsl(var(--border))" strokeDasharray="3 3" />
-          {/* Selected-month highlight bands */}
-          {selectedMonths.map(idx => (
-            <ReferenceLine
-              key={idx}
-              x={data[idx].month}
-              stroke="hsl(var(--primary))"
-              strokeOpacity={0.15}
-              strokeWidth={20}
-            />
-          ))}
+          {/* Selected-month highlight bands: single months keep the classic
+              20px stripe; runs of adjacent months render as one uniform band
+              that keeps the exact same outer borders (no overlap). */}
+          {selectedRuns.map(([start, end], i) =>
+            start === end ? (
+              <ReferenceLine
+                key={`band-${i}`}
+                x={data[start].month}
+                stroke="hsl(var(--primary))"
+                strokeOpacity={0.15}
+                strokeWidth={20}
+              />
+            ) : (
+              <ReferenceArea
+                key={`band-${i}`}
+                x1={data[start].month}
+                x2={data[end].month}
+                fill="hsl(var(--primary))"
+                fillOpacity={0.15}
+                ifOverflow="visible"
+                shape={HighlightBandShape}
+              />
+            )
+          )}
           <XAxis
             dataKey="month"
             tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
