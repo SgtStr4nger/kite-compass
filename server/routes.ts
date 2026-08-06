@@ -1336,6 +1336,78 @@ async function recalculateScoresForSpotIds(config: ScoringConfig, spotIds: numbe
   }
 }
 
+/* ───────── Sitemap (SEO) ───────── */
+// Public base URL used for sitemap/robots absolute URLs. Falls back to the
+// request Host header per request when unset.
+const PUBLIC_URL = process.env.PUBLIC_URL?.replace(/\/+$/, "") || "";
+const SITEMAP_REFRESH_MS = 24 * 60 * 60 * 1000; // daily refresh (floor; publish invalidates live)
+
+let sitemapCache: { xml: string; baseUrl: string; builtAt: number } | null = null;
+
+function escapeXml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+// Static pages + one entry per published spot. Hash-based URLs — the SPA is
+// hash-routed and every real path serves index.html (server/static.ts).
+const SITEMAP_STATIC_PATHS = ["/", "/results", "/methodology", "/privacy-policy", "/legal-notice"];
+
+async function buildSitemapXml(baseUrl: string): Promise<string> {
+  const entries: { loc: string; lastmod?: string }[] = SITEMAP_STATIC_PATHS.map((p) => ({
+    loc: `/#${p === "/" ? "/" : p}`,
+  }));
+  const publishedSpots = await storage.listSpots(true);
+  for (const spot of publishedSpots) {
+    entries.push({
+      loc: `/#/spots/${publishedSnapshotSlug(spot) ?? spot.slug}`,
+      lastmod: spot.updatedAt || undefined,
+    });
+  }
+  const body = entries
+    .map((e) => {
+      const loc = `    <loc>${escapeXml(baseUrl + e.loc)}</loc>`;
+      const lastmod = e.lastmod ? `\n    <lastmod>${escapeXml(e.lastmod)}</lastmod>` : "";
+      return `  <url>\n${loc}${lastmod}\n  </url>`;
+    })
+    .join("\n");
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+    body,
+    "</urlset>",
+    "",
+  ].join("\n");
+}
+
+function resolveBaseUrl(req: Request): string {
+  if (PUBLIC_URL) return PUBLIC_URL;
+  const host = req.get("host");
+  return host ? `https://${host}` : "http://localhost:5000";
+}
+
+function clearSitemapCache() {
+  sitemapCache = null;
+}
+
+async function getSitemapXml(baseUrl: string): Promise<string> {
+  if (sitemapCache && sitemapCache.baseUrl === baseUrl && Date.now() - sitemapCache.builtAt < SITEMAP_REFRESH_MS) {
+    return sitemapCache.xml;
+  }
+  const xml = await buildSitemapXml(baseUrl);
+  sitemapCache = { xml, baseUrl, builtAt: Date.now() };
+  return xml;
+}
+
+// Daily rebuild so the sitemap stays fresh even when nothing is published.
+setInterval(() => {
+  sitemapCache = null;
+}, SITEMAP_REFRESH_MS);
+
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
   // ── Redirect middleware (spec §29): 301 for non-broken, non-API paths ──
   app.use((req, _res, next) => {
@@ -1347,7 +1419,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     next();
   });
 
-  app.get("/robots.txt", (_req, res) => {
+  app.get("/robots.txt", (req, res) => {
     res.type("text/plain").send([
       "User-agent: *",
       "Allow: /",
@@ -1355,7 +1427,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       "Disallow: /admin/",
       "Disallow: /*preview=1",
       "Disallow: /api/",
+      "",
+      `Sitemap: ${resolveBaseUrl(req)}/sitemap.xml`,
     ].join("\n"));
+  });
+
+  app.get("/sitemap.xml", async (req, res) => {
+    try {
+      const xml = await getSitemapXml(resolveBaseUrl(req));
+      res.type("application/xml").send(xml);
+    } catch (error) {
+      void logError("Sitemap", error instanceof Error ? error.message : String(error), null);
+      res.status(500).send("Internal Server Error");
+    }
   });
 
   /* ══════════════ AUTH ══════════════ */
@@ -2165,6 +2249,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/admin/spots/:id/publish", requireAuth, async (req, res) => {
     const s = await storage.publishSpot(Number(req.params.id));
     if (!s) return res.status(404).json({ error: "not found" });
+    clearSitemapCache();
     res.json(serializeSpot(s));
   });
 
@@ -2177,6 +2262,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const publishedCount = await storage.publishAllMonthlyForSpot(spotId);
     await storage.resetWeatherManualChanges(spotId);
     const fresh = await storage.getSpot(spotId);
+    clearSitemapCache();
     res.json({ spot: serializeSpot(fresh!, true), publishedCount, recalculatedRows });
   });
 
@@ -2189,6 +2275,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const recalculatedRows = await recalculateScoresForSpotIds(scoring.published, [spotId], "spots recalculated");
     const publishedCount = await storage.publishAllMonthlyForSpot(spotId);
     await storage.resetWeatherManualChanges(spotId);
+    clearSitemapCache();
     res.json({ spot: serializeSpot(publishedSpot!, true), publishedCount, recalculatedRows });
   });
 
@@ -2219,6 +2306,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     }
 
+    clearSitemapCache();
     res.json({
       mode,
       targetSpots: targetSpots.length,
@@ -2230,6 +2318,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.delete("/api/admin/spots/:id", requireAuth, async (req, res) => {
     await storage.deleteSpot(Number(req.params.id));
+    clearSitemapCache();
     res.json({ ok: true });
   });
 
@@ -2386,6 +2475,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await storage.resetWeatherManualChanges(spotId);
     }
     const skipped = alreadyPublished + noMonthlyData;
+    clearSitemapCache();
     res.json({ scope, published, skipped, alreadyPublished, noMonthlyData, scopedMonthlyRows: scopedRows.length, recalculatedRows });
   });
 
@@ -2417,12 +2507,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const spot = await storage.getSpot(updated.spotId);
     if (spot?.published) {
       await storage.publishMonthly(updated.id);
+      clearSitemapCache();
     }
     res.json(serializeMonthly(updated));
   });
   app.post("/api/admin/monthly/:id/publish", requireAuth, async (req, res) => {
     const m = await storage.publishMonthly(Number(req.params.id));
     if (!m) return res.status(404).json({ error: "not found" });
+    clearSitemapCache();
     res.json(serializeMonthly(m));
   });
   app.post("/api/admin/spots/:id/monthly/publish", requireAuth, async (req, res) => {
@@ -2433,6 +2525,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const recalculatedRows = await recalculateScoresForSpotIds(scoring.published, [spotId], "spots recalculated");
     const count = await storage.publishAllMonthlyForSpot(spotId);
     await storage.resetWeatherManualChanges(spotId);
+    clearSitemapCache();
     res.json({ publishedCount: count, recalculatedRows });
   });
   // Reset all manual weather changes for a spot (spec §19.4).
@@ -2498,6 +2591,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     void recalculateScoresForAllSpots(scoring.draft, true).catch((error) => {
       void logError("Scoring Publish", `Score recalculation failed: ${error instanceof Error ? error.message : String(error)}`, null);
     });
+    clearSitemapCache();
     res.json({ ok: true });
   });
 
@@ -2538,6 +2632,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/admin/listings/schools/:id/publish", requireAuth, async (req, res) => {
     const row = await storage.publishSchool(Number(req.params.id));
     if (!row) return res.status(404).json({ error: "not found" });
+    clearSitemapCache();
     res.json({ ...row, sports: parseArr(row.sports) });
   });
 
@@ -2581,6 +2676,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/admin/listings/stays/:id/publish", requireAuth, async (req, res) => {
     const row = await storage.publishStay(Number(req.params.id));
     if (!row) return res.status(404).json({ error: "not found" });
+    clearSitemapCache();
     res.json(row);
   });
 
@@ -2862,6 +2958,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(400).json({ error: "All six SEO fields are required before publish." });
     }
     const seo = await storage.publishSeoDraft();
+    clearSitemapCache();
     res.json({
       ...seo,
       canPublish: allSeoDraftFieldsFilled({

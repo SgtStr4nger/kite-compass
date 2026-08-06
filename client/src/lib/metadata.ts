@@ -36,6 +36,14 @@ function toAbsoluteUrl(pathOrUrl: string): string {
   return `${window.location.origin}${normalized}`;
 }
 
+// The SPA is hash-routed: real server paths always serve index.html, so the
+// canonical for a page is the origin plus its hash route (e.g. `/#/spots/tarifa`).
+function toCanonicalUrl(pathOrRoute: string): string {
+  if (/^https?:\/\//i.test(pathOrRoute)) return pathOrRoute;
+  const normalized = pathOrRoute.startsWith("/") ? pathOrRoute : `/${pathOrRoute}`;
+  return `${window.location.origin}/#${normalized === "/" ? "/" : normalized}`;
+}
+
 export function applyRobotsMetadata(robots: string) {
   upsertMetaBy("robots", "name", robots);
 }
@@ -57,11 +65,14 @@ export function applyPageMetadata(
   upsertMetaBy("description", "name", input.description);
   upsertMetaBy("robots", "name", input.robots ?? "index,follow");
 
+  // Canonical = the hash route the page is actually served at (matches the
+  // sitemap URLs). Explicit canonicalUrl wins and is used as-is.
+  const hashRoute = window.location.hash.replace(/^#/, "").split("?")[0] || "/";
   const canonical = input.canonicalUrl
     ? toAbsoluteUrl(input.canonicalUrl)
     : input.canonicalPath
-      ? toAbsoluteUrl(input.canonicalPath)
-      : toAbsoluteUrl(window.location.pathname);
+      ? toCanonicalUrl(input.canonicalPath)
+      : toCanonicalUrl(hashRoute);
   upsertCanonical(canonical);
 
   upsertMetaBy("og:title", "property", input.ogTitle ?? input.title);
