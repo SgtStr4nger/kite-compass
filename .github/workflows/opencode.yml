@@ -1,0 +1,66 @@
+name: opencode
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  id-token: write
+
+concurrency:
+  group: opencode-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  analyze:
+    if: >-
+      contains(github.event.comment.body, '/oc') &&
+      contains(github.event.comment.body, '/analyze')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: anomalyco/opencode/github@latest
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        with:
+          model: opencode/deepseek-v4-flash-free
+          agent: analyzer
+          share: true
+
+  plan:
+    if: >-
+      contains(github.event.comment.body, '/oc') &&
+      contains(github.event.comment.body, '/plan')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: anomalyco/opencode/github@latest
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        with:
+          model: opencode/deepseek-v4-flash-free
+          agent: planner
+          share: true
+
+  implement:
+    if: >-
+      contains(github.event.comment.body, '/oc') &&
+      contains(github.event.comment.body, '/implement')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: anomalyco/opencode/github@latest
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        with:
+          model: opencode/deepseek-v4-flash-free
+          agent: implementer
+          share: true
