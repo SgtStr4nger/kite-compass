@@ -24,6 +24,10 @@ jobs:
         with:
           fetch-depth: 1
           persist-credentials: false
+      - name: Configure git identity
+        run: |
+          git config --global user.name "opencode-bot"
+          git config --global user.email "opencode-bot@users.noreply.github.com"
       - uses: anomalyco/opencode/github@latest
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
@@ -44,6 +48,10 @@ jobs:
         with:
           fetch-depth: 1
           persist-credentials: false
+      - name: Configure git identity
+        run: |
+          git config --global user.name "opencode-bot"
+          git config --global user.email "opencode-bot@users.noreply.github.com"
       - uses: anomalyco/opencode/github@latest
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
@@ -64,6 +72,10 @@ jobs:
         with:
           fetch-depth: 1
           persist-credentials: false
+      - name: Configure git identity
+        run: |
+          git config --global user.name "opencode-bot"
+          git config --global user.email "opencode-bot@users.noreply.github.com"
       - uses: anomalyco/opencode/github@latest
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
