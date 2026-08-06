@@ -3,7 +3,7 @@ import { useRoute, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, ResponsiveContainer,
-  ReferenceLine,
+  ReferenceArea,
 } from "recharts";
 import { SiteLayout } from "@/components/SiteChrome";
 import { SpotMap } from "@/components/SpotMap";
@@ -458,8 +458,16 @@ function MonthlyChart({
   yDomain: [number | string, number | string];
 }) {
   const xLabels = new Set(["Jan", "Apr", "Jul", "Oct"]);
-  // Selected month indices for reference lines.
-  const selectedMonths = data.map((d, i) => (d.selected ? i : -1)).filter(i => i >= 0);
+  // Selected month indices for highlight bands.
+  const selectedIndices = data.map((d, i) => (d.selected ? i : -1)).filter(i => i >= 0);
+  // Group contiguous selected indices into runs so that adjacent selected months
+  // render as one continuous band instead of separate, gap-y stripes.
+  const selectedRuns: Array<[number, number]> = [];
+  for (const idx of selectedIndices) {
+    const last = selectedRuns[selectedRuns.length - 1];
+    if (last && idx === last[1] + 1) last[1] = idx;
+    else selectedRuns.push([idx, idx]);
+  }
   // Gradient ids must not contain spaces, otherwise the `url(#...)` fill
   // reference fails to resolve and the area falls back to a dark fill.
   const gradId = `grad-${title.replace(/\s+/g, "")}`;
@@ -476,14 +484,14 @@ function MonthlyChart({
             </linearGradient>
           </defs>
           <CartesianGrid vertical={false} stroke="hsl(var(--border))" strokeDasharray="3 3" />
-          {/* Selected-month highlight bands */}
-          {selectedMonths.map(idx => (
-            <ReferenceLine
-              key={idx}
-              x={data[idx].month}
-              stroke="hsl(var(--primary))"
-              strokeOpacity={0.15}
-              strokeWidth={20}
+          {/* Selected-month highlight bands (adjacent months joined into one band) */}
+          {selectedRuns.map(([start, end], i) => (
+            <ReferenceArea
+              key={i}
+              x1={data[start].month}
+              x2={data[end].month}
+              fill="hsl(var(--primary))"
+              fillOpacity={0.1}
             />
           ))}
           <XAxis
