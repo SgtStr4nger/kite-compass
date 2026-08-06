@@ -224,10 +224,10 @@ export function AdminLayout({ children }: { children: ReactNode }) {
           <CompassMark className="h-7 w-7 text-sidebar-primary" />
           <span className="font-serif text-lg font-semibold">Kite Compass</span>
         </div>
-        <div className="px-3 text-xs font-medium uppercase tracking-wide text-sidebar-foreground/50">Admin</div>
+        <div className="px-3 pb-1 text-xs font-medium uppercase tracking-wide text-sidebar-foreground/50">Admin</div>
         <nav className="mt-2 flex-1 space-y-1 px-3">
           <div className="pt-2">
-            <div className="px-3 pb-1 text-xs font-medium uppercase tracking-wide text-sidebar-foreground/40">Content</div>
+            <div className="px-3 pb-1 text-xs font-medium uppercase tracking-wide text-sidebar-foreground/50">Content</div>
             {navLink("/admin/spots", <LayoutGrid className="h-4 w-4" />, "Spots", "link-admin-spots")}
             {navLink("/admin/listings/schools", <School className="h-4 w-4" />, "Kite Schools", "link-admin-listings-schools")}
             {navLink("/admin/listings/stays", <Hotel className="h-4 w-4" />, "Stays", "link-admin-listings-stays")}
@@ -236,7 +236,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
           </div>
 
           <div className="pt-2">
-            <div className="px-3 pb-1 text-xs font-medium uppercase tracking-wide text-sidebar-foreground/40">Settings</div>
+            <div className="px-3 pb-1 text-xs font-medium uppercase tracking-wide text-sidebar-foreground/50">Settings</div>
             {navLink("/admin/seo", <Search className="h-4 w-4" />, "SEO", "link-admin-seo")}
             {navLink("/admin/redirects", <ArrowRightLeft className="h-4 w-4" />, "Redirects", "link-admin-redirects")}
             {navLink("/admin/legal", <FileText className="h-4 w-4" />, "Legal", "link-admin-legal")}
