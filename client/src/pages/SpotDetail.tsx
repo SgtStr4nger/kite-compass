@@ -3,7 +3,7 @@ import { useRoute, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, ResponsiveContainer,
-  ReferenceArea,
+  ReferenceArea, ReferenceLine,
 } from "recharts";
 import { SiteLayout } from "@/components/SiteChrome";
 import { SpotMap } from "@/components/SpotMap";
@@ -484,16 +484,32 @@ function MonthlyChart({
             </linearGradient>
           </defs>
           <CartesianGrid vertical={false} stroke="hsl(var(--border))" strokeDasharray="3 3" />
-          {/* Selected-month highlight bands (adjacent months joined into one band) */}
-          {selectedRuns.map(([start, end], i) => (
-            <ReferenceArea
-              key={i}
-              x1={data[start].month}
-              x2={data[end].month}
-              fill="hsl(var(--primary))"
-              fillOpacity={0.1}
-            />
-          ))}
+          {/* Selected-month highlight bands: the classic 20px stripes stay on the
+              outer edges of each run (single months keep exactly the old look),
+              while a fill joins adjacent months together without moving those edges. */}
+          {selectedRuns.map(([start, end], i) =>
+            start === end ? null : (
+              <ReferenceArea
+                key={`band-${i}`}
+                x1={data[start].month}
+                x2={data[end].month}
+                fill="hsl(var(--primary))"
+                fillOpacity={0.15}
+              />
+            )
+          )}
+          {selectedRuns.flatMap(([start, end], i) => {
+            const edgeIdx = start === end ? [start] : [start, end];
+            return edgeIdx.map(idx => (
+              <ReferenceLine
+                key={`edge-${i}-${idx}`}
+                x={data[idx].month}
+                stroke="hsl(var(--primary))"
+                strokeOpacity={0.15}
+                strokeWidth={20}
+              />
+            ));
+          })}
           <XAxis
             dataKey="month"
             tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
