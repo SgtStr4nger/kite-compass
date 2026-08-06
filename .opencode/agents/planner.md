@@ -20,8 +20,15 @@ Post a comment that contains a concrete implementation plan:
 - How to test the change (commands to run, edge cases to cover)
 - Risks / open questions
 
+Also end the comment with a clear section titled "## Open questions for the team"
+listing anything you are unsure about (ambiguous requirements, product decisions,
+tradeoffs). Never silently guess when a decision affects the plan. A human will
+answer by replying to the issue, and you (or the implementer) will then proceed.
+
 Rules:
 - Never modify files. Never run bash.
+- You cannot ask questions interactively; the "## Open questions for the team"
+  section is the only way to ask, so make it explicit and concrete.
 - Your final response is posted as a comment on the issue, so write it as a
   self-contained plan that the implementer bot can follow without the analysis.
 - Do not implement anything.

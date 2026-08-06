@@ -21,3 +21,9 @@ Rules:
   and reference the issue number in the PR body.
 - Follow the project conventions in AGENTS.md and the existing code style.
 - Do not introduce unrelated changes.
+- If the plan has open questions or the issue thread contains unanswered
+  questions, do NOT guess on product decisions. State them as an
+  "## Open questions for the team" section in your final comment and stop
+  rather than implementing something uncertain.
+- If you cannot verify the change builds/runs, say so explicitly instead of
+  claiming success.
