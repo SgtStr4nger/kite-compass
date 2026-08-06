@@ -1,12 +1,10 @@
 import { useMemo, useState } from "react";
 import { FilterDef, MONTHS, tagLabel } from "@/lib/types";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Slider } from "@/components/ui/slider";
-import { EXPLORE_CONTINENTS, type ExploreContinent } from "@shared/locations";
+import { LocationPicker } from "@/components/LocationPicker";
+import type { ExploreContinent } from "@shared/locations";
 
 const WIND_SLIDER_MIN = 15;
 const WIND_SLIDER_MAX = 40;
@@ -169,101 +167,6 @@ function MultiGroup({
   );
 }
 
-function LocationGroup({
-  countries,
-  state,
-  onChange,
-}: {
-  countries: string[];
-  state: FilterState;
-  onChange: (s: FilterState) => void;
-}) {
-  const [countrySearch, setCountrySearch] = useState("");
-
-  const matchingCountries = useMemo(() => {
-    const query = countrySearch.trim().toLowerCase();
-    if (!query) return countries;
-    return countries.filter((country) => country.toLowerCase().includes(query));
-  }, [countries, countrySearch]);
-
-  const locationActive = state.continents.length > 0 || state.countries.length > 0;
-
-  return (
-    <div>
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <div className="text-sm font-medium text-foreground">Where do you want to go?</div>
-        {locationActive && (
-          <button
-            type="button"
-            className="text-xs text-muted-foreground hover:text-foreground"
-            onClick={() => onChange({ ...state, continents: [], countries: [] })}
-          >
-            Clear
-          </button>
-        )}
-      </div>
-
-      <div className="space-y-3 rounded-xl border border-border bg-background/60 p-3">
-        <div>
-          <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Continent</div>
-          <div className="flex flex-wrap gap-2">
-            {EXPLORE_CONTINENTS.map((continent) => {
-              const selected = state.continents.includes(continent);
-              return (
-                <button
-                  key={continent}
-                  type="button"
-                  onClick={() => onChange({ ...state, continents: toggleArrayValue(state.continents, continent) })}
-                  className={`rounded-full border px-3 py-1 text-sm transition-colors ${
-                    selected ? "border-primary bg-primary text-primary-foreground"
-                      : "border-border bg-background text-foreground/80 hover-elevate"
-                  }`}
-                >
-                  {continent}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        <div>
-          <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Country</div>
-          <Input
-            value={countrySearch}
-            onChange={(event) => setCountrySearch(event.target.value)}
-            placeholder="Search countries"
-            data-testid="input-search-countries-public"
-          />
-          <ScrollArea className="mt-2 h-52 rounded-lg border border-border bg-card">
-            <div className="space-y-1 p-2">
-              {matchingCountries.map((country) => {
-                const selected = state.countries.includes(country);
-                return (
-                  <label
-                    key={country}
-                    className={`flex cursor-pointer items-center gap-3 rounded-md px-2 py-2 text-sm transition-colors ${
-                      selected ? "bg-primary/10 text-foreground" : "hover:bg-muted/60"
-                    }`}
-                  >
-                    <Checkbox
-                      checked={selected}
-                      onCheckedChange={() => onChange({ ...state, countries: toggleArrayValue(state.countries, country) })}
-                    />
-                    <span>{country}</span>
-                  </label>
-                );
-              })}
-              {matchingCountries.length === 0 && (
-                <div className="px-2 py-6 text-center text-sm text-muted-foreground">No countries match that search.</div>
-              )}
-            </div>
-          </ScrollArea>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export function FilterPanel({
   defs, countries, state, onChange,
 }: {
@@ -288,7 +191,11 @@ export function FilterPanel({
     <div className="space-y-6">
       <MonthPicker value={state.months} onChange={(months) => onChange({ ...state, months })} />
 
-      <LocationGroup countries={countries} state={state} onChange={onChange} />
+      <LocationPicker
+        countries={countries}
+        value={{ continents: state.continents, countries: state.countries }}
+        onChange={(location) => onChange({ ...state, ...location })}
+      />
 
       <div>
         <div className="mb-2 flex items-center justify-between text-sm font-medium text-foreground">
