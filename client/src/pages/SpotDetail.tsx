@@ -465,8 +465,8 @@ function MonthlyChart({
         <AreaChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: -16 }}>
           <defs>
             <linearGradient id={`grad-${title}`} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.18} />
-              <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0} />
+              <stop offset="5%" stopColor="#2d8290" stopOpacity={0.4} />
+              <stop offset="95%" stopColor="#2d8290" stopOpacity={0} />
             </linearGradient>
           </defs>
           <CartesianGrid vertical={false} stroke="hsl(var(--border))" strokeDasharray="3 3" />
