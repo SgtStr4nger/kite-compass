@@ -28,6 +28,9 @@ and handing the open questions back to the user.
   (they contain "pull_request"). Skip issues that already have a plan comment.
   Only plan issues carrying the `status:needs-planner` label (the triage rules
   in AGENTS.md are the source of truth) — skip everything else.
+  **Order the batch by `priority` labels: `p0` first down to `p3`; issues with
+  no `priority:*` label go last.** If the user named specific issues, honor
+  that order instead.
 
 ## Behaviour
 1. For each target issue, set its label to `status:planner-working` (update

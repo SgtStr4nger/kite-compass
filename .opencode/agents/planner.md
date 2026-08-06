@@ -29,6 +29,17 @@ canonical ones in AGENTS.md). You own tickets labeled:
 Only act on issues carrying those labels — skip everything else. NEVER rely on
 the assignee; the label is the authority.
 
+**Picking the next issue: when multiple candidates carry your label, take the
+highest `priority:*` first.** Priority solves ties only — it never overrides the
+`status:*` gate. Selection order:
+1. `status:*` must match yours first (a priority label alone is not a claim).
+2. Then rank candidates by `priority:p0` > `priority:p1` > `priority:p2` >
+   `priority:p3`; issues with no `priority:*` label rank last. Among equal
+   priorities prefer the lowest issue number (oldest), unless the user names a
+   specific issue.
+3. If the user explicitly points at an issue (e.g. "plan #24"), do that one even
+   if it is not the highest priority, but mention its priority in your report.
+
 Transition the status label (via the GitHub API; read current labels, drop the
 old `status:*`, keep `type:*`/`area:*`, add the new value):
 

@@ -54,7 +54,9 @@ Area (pick the most relevant one):
 - `area:infra` — deploy, build, CI
 
 Do NOT assign `priority:*` labels — those are decided later by the planner
-and the user. Do assign the initial `status:needs-planner` label to every new
+and the user. (The set is `priority:p0` > `priority:p1` > `priority:p2` >
+`priority:p3`, and it drives pull-order for the planner/implementer, so leave
+it to them.) Do assign the initial `status:needs-planner` label to every new
 ticket (the one `status:*` label the pipeline needs on day one).
 
 ## Auth
