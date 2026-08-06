@@ -15,6 +15,7 @@ data.db-journal
 *.log
 .DS_Store
 Kite-Compas - specs v1.txt
+ideas.md
 .github/instructions/perplexity-mcp.instructions.md
 WORK_PACKAGE_PLAN.md
 .gitignore
