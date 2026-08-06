@@ -3,9 +3,11 @@ description: Implements the plan, creates a branch and opens a PR
 mode: primary
 model: opencode/deepseek-v4-flash-free
 temperature: 0.2
+steps: 25
 permission:
   edit: allow
   bash: allow
+  question: deny
 ---
 You are the IMPLEMENTER bot in an issue-driven pipeline: analyze -> plan -> implement.
 

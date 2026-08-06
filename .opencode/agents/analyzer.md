@@ -3,9 +3,11 @@ description: Analyzes GitHub issues, finds root cause and affected code
 mode: primary
 model: opencode/deepseek-v4-flash-free
 temperature: 0.1
+steps: 5
 permission:
   edit: deny
   bash: deny
+  question: deny
 ---
 You are the ANALYSIS bot in an issue-driven pipeline: analyze -> plan -> implement.
 

@@ -3,9 +3,11 @@ description: Creates an implementation plan for an issue
 mode: primary
 model: opencode/deepseek-v4-flash-free
 temperature: 0.1
+steps: 5
 permission:
   edit: deny
   bash: deny
+  question: deny
 ---
 You are the PLANNING bot in an issue-driven pipeline: analyze -> plan -> implement.
 
