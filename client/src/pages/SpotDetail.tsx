@@ -457,6 +457,9 @@ function MonthlyChart({
   const xLabels = new Set(["Jan", "Apr", "Jul", "Oct"]);
   // Selected month indices for reference lines.
   const selectedMonths = data.map((d, i) => (d.selected ? i : -1)).filter(i => i >= 0);
+  // Gradient ids must not contain spaces, otherwise the `url(#...)` fill
+  // reference fails to resolve and the area falls back to a dark fill.
+  const gradId = `grad-${title.replace(/\s+/g, "")}`;
 
   return (
     <div className="rounded-2xl border border-card-border bg-card p-4">
@@ -464,7 +467,7 @@ function MonthlyChart({
       <ResponsiveContainer width="100%" height={120}>
         <AreaChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: -16 }}>
           <defs>
-            <linearGradient id={`grad-${title}`} x1="0" y1="0" x2="0" y2="1">
+            <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
               <stop offset="5%" stopColor="#2d8290" stopOpacity={0.4} />
               <stop offset="95%" stopColor="#2d8290" stopOpacity={0} />
             </linearGradient>
@@ -500,7 +503,7 @@ function MonthlyChart({
             dataKey="value"
             stroke="hsl(var(--primary))"
             strokeWidth={1.75}
-            fill={`url(#grad-${title})`}
+            fill={`url(#${gradId})`}
             connectNulls={false}
             dot={(props: any) => {
               const { cx, cy, payload } = props;
