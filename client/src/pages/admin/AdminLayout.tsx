@@ -218,44 +218,28 @@ export function AdminLayout({ children }: { children: ReactNode }) {
   };
 
   return (
-    <div className="flex min-h-screen bg-background">
-      <aside className="hidden w-60 shrink-0 flex-col bg-sidebar text-sidebar-foreground md:flex">
+    <div className="flex h-screen overflow-hidden bg-background">
+      <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col overflow-y-auto bg-sidebar text-sidebar-foreground md:flex">
         <div className="flex items-center gap-2.5 px-5 py-5">
           <CompassMark className="h-7 w-7 text-sidebar-primary" />
           <span className="font-serif text-lg font-semibold">Kite Compass</span>
         </div>
-        <div className="px-3 text-xs font-medium uppercase tracking-wide text-sidebar-foreground/50">Admin</div>
         <nav className="mt-2 flex-1 space-y-1 px-3">
-          {navLink("/admin/spots", <LayoutGrid className="h-4 w-4" />, "Spots", "link-admin-spots")}
-
-          <div className="pt-2">
-            <div className="px-3 pb-1 text-xs font-medium uppercase tracking-wide text-sidebar-foreground/40">Listings</div>
+          <div>
+            <div className="px-3 pb-1 text-xs font-medium uppercase tracking-wide text-sidebar-foreground/50">Content</div>
+            {navLink("/admin/spots", <LayoutGrid className="h-4 w-4" />, "Spots", "link-admin-spots")}
             {navLink("/admin/listings/schools", <School className="h-4 w-4" />, "Kite Schools", "link-admin-listings-schools")}
             {navLink("/admin/listings/stays", <Hotel className="h-4 w-4" />, "Stays", "link-admin-listings-stays")}
+            {navLink("/admin/data", <Database className="h-4 w-4" />, "Data", "link-admin-data")}
+            {navLink("/admin/trash", <Trash2 className="h-4 w-4" />, "Trash", "link-admin-trash")}
           </div>
 
           <div className="pt-2">
-            <div className="px-3 pb-1 text-xs font-medium uppercase tracking-wide text-sidebar-foreground/40">Settings</div>
-            {navLink("/admin/data", <Database className="h-4 w-4" />, "Data", "link-admin-data")}
+            <div className="px-3 pb-1 text-xs font-medium uppercase tracking-wide text-sidebar-foreground/50">Settings</div>
             {navLink("/admin/seo", <Search className="h-4 w-4" />, "SEO", "link-admin-seo")}
-            {navLink("/admin/legal", <FileText className="h-4 w-4" />, "Legal", "link-admin-legal")}
             {navLink("/admin/redirects", <ArrowRightLeft className="h-4 w-4" />, "Redirects", "link-admin-redirects")}
+            {navLink("/admin/legal", <FileText className="h-4 w-4" />, "Legal", "link-admin-legal")}
             {navLink("/admin/users", <Users className="h-4 w-4" />, "Users", "link-admin-users")}
-            {role === "main" ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="w-full justify-start gap-2 rounded-lg px-3 py-2 text-sm font-medium text-sidebar-foreground/90 hover:bg-sidebar-accent"
-                onClick={() => { void handleDeploy(); }}
-                disabled={deploying}
-                data-testid="button-deploy-latest-main"
-              >
-                {deploying ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
-                Deploy latest main
-              </Button>
-            ) : null}
-            {navLink("/admin/trash", <Trash2 className="h-4 w-4" />, "Trash", "link-admin-trash")}
             <Link href="/admin/errors"
               className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium no-underline transition-colors ${location === "/admin/errors" ? "bg-sidebar-accent text-sidebar-foreground" : "text-sidebar-foreground/90 hover:bg-sidebar-accent"}`}
               data-testid="link-admin-errors">
@@ -274,6 +258,23 @@ export function AdminLayout({ children }: { children: ReactNode }) {
               <ExternalLink className="h-4 w-4" /> View public site
             </a>
           </div>
+
+          {role === "main" ? (
+            <div className="pt-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="w-full justify-start gap-2 rounded-lg px-3 py-2 text-sm font-medium text-sidebar-foreground/90 hover:bg-sidebar-accent"
+                onClick={() => { void handleDeploy(); }}
+                disabled={deploying}
+                data-testid="button-deploy-latest-main"
+              >
+                {deploying ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
+                Deploy latest main
+              </Button>
+            </div>
+          ) : null}
         </nav>
         <div className="border-t border-sidebar-border p-3">
           <div className="mb-2 truncate px-2 text-xs text-sidebar-foreground/60">{email}</div>
@@ -283,7 +284,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
           </Button>
         </div>
       </aside>
-      <div className="flex-1 overflow-x-hidden">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden">
         {excelStatus?.visible && (
           <div className={`border-b px-5 py-3 text-sm md:px-8 ${excelStatus.active ? "border-amber-300 bg-amber-50 text-amber-900" : "border-emerald-300 bg-emerald-50 text-emerald-900"}`}>
             <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
