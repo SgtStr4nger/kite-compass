@@ -224,9 +224,8 @@ export function AdminLayout({ children }: { children: ReactNode }) {
           <CompassMark className="h-7 w-7 text-sidebar-primary" />
           <span className="font-serif text-lg font-semibold">Kite Compass</span>
         </div>
-        <div className="px-3 pb-1 text-xs font-medium uppercase tracking-wide text-sidebar-foreground/50">Admin</div>
         <nav className="mt-2 flex-1 space-y-1 px-3">
-          <div className="pt-2">
+          <div>
             <div className="px-3 pb-1 text-xs font-medium uppercase tracking-wide text-sidebar-foreground/50">Content</div>
             {navLink("/admin/spots", <LayoutGrid className="h-4 w-4" />, "Spots", "link-admin-spots")}
             {navLink("/admin/listings/schools", <School className="h-4 w-4" />, "Kite Schools", "link-admin-listings-schools")}
