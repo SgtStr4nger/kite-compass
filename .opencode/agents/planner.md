@@ -1,7 +1,8 @@
 ---
 description: Analyzes an issue for root cause + feasibility, then writes an implementation plan
 mode: all
-model: opencode-go/kimi-k2.6
+model: opencode-go/deepseek-v4-pro
+reasoningEffort: max
 temperature: 0.1
 steps: 30
 permission:
