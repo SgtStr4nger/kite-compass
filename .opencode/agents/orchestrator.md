@@ -1,7 +1,7 @@
 ---
 description: Plans multiple GitHub issues in one pass by delegating each to the planner subagent
 mode: primary
-model: opencode-go/deepseek-v4-pro
+model: opencode-go/deepseek-v4-flash
 reasoningEffort: max
 temperature: 0.1
 steps: 60

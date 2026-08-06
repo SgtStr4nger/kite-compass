@@ -1,7 +1,7 @@
 ---
 description: Analyzes an issue for root cause + feasibility, then writes an implementation plan
 mode: all
-model: opencode-go/deepseek-v4-pro
+model: opencode-go/deepseek-v4-flash
 reasoningEffort: max
 temperature: 0.1
 steps: 30
