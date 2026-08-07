@@ -52,7 +52,7 @@ type ImportRowKind = "new" | "update" | "error_id_not_found" | "error_invalid_da
 type SpotJsonScope = "all" | "filtered" | "selected";
 type SchoolsStaysJsonScope = "all" | "filtered" | "selected";
 type CanonicalSpotImport = {
-  slug: string;
+  slug: string | null;
   name: string;
   country: string;
   region: string;
@@ -79,6 +79,7 @@ type CanonicalSpotImport = {
   seoDescriptionOverride: string;
   rankingMode: "manual" | "auto";
 };
+// Only `id` resolves which record is updated; publicId/slug/name are display/reference only.
 type SpotJsonMatch = { publicId?: string; id?: number; slug?: string };
 type SpotsCentralJsonItem = { match?: SpotJsonMatch; spot: CanonicalSpotImport };
 type SpotsCentralJsonPayload = {
@@ -88,7 +89,7 @@ type SpotsCentralJsonPayload = {
   scope: SpotJsonScope;
   items: SpotsCentralJsonItem[];
 };
-// Schools/Stays import-export contract: stable shape, entity discriminator, and matching by id/name fallback.
+// Schools/Stays import-export contract: stable shape, entity discriminator, and matching by id only; publicId/name are display/reference only.
 type SchoolJsonMatch = { publicId?: string; id?: number; name?: string };
 type CanonicalSchoolImport = {
   name: string;
@@ -340,9 +341,7 @@ function parseStringArrayEnum(value: unknown, allowed: Set<string>): string[] | 
 function parseSpotJsonItem(
   rowNumber: number,
   item: unknown,
-  spotByPublicId: Map<string, Spot>,
   spotById: Map<number, Spot>,
-  spotBySlug: Map<string, Spot>,
 ): ParsedImportRow {
   if (!item || typeof item !== "object" || Array.isArray(item)) {
     return { rowNumber, kind: "error_invalid_data", internalId: null, error: "Item must be an object", values: {}, normalized: null };
@@ -371,9 +370,7 @@ function parseSpotJsonItem(
   }
 
   const matchRaw = itemObj.match;
-  let matchPublicId: string | undefined;
   let matchId: number | undefined;
-  let matchSlug: string | undefined;
   if (matchRaw !== undefined) {
     if (!matchRaw || typeof matchRaw !== "object" || Array.isArray(matchRaw)) {
       return { rowNumber, kind: "error_invalid_data", internalId: null, error: "match must be an object", values: itemObj, normalized: null };
@@ -387,7 +384,6 @@ function parseSpotJsonItem(
       if (typeof matchObj.publicId !== "string" || !matchObj.publicId.trim()) {
         return { rowNumber, kind: "error_invalid_data", internalId: null, error: "match.publicId must be a non-empty string", values: itemObj, normalized: null };
       }
-      matchPublicId = matchObj.publicId.trim();
     }
     if (matchObj.id !== undefined) {
       if (!Number.isInteger(matchObj.id) || Number(matchObj.id) <= 0) {
@@ -399,7 +395,6 @@ function parseSpotJsonItem(
       if (typeof matchObj.slug !== "string" || !matchObj.slug.trim()) {
         return { rowNumber, kind: "error_invalid_data", internalId: null, error: "match.slug must be a non-empty string", values: itemObj, normalized: null };
       }
-      matchSlug = matchObj.slug.trim();
     }
   }
 
@@ -433,7 +428,10 @@ function parseSpotJsonItem(
   if (!name || !name.trim()) {
     return { rowNumber, kind: "error_invalid_data", internalId: null, error: "spot.name is required", values: itemObj, normalized: null };
   }
-  if (slug == null || country == null || region == null || heroImageUrl == null || teaserText == null || destinationSummary == null
+  if (spotObj.slug !== undefined && (slug == null || !slug.trim())) {
+    return { rowNumber, kind: "error_invalid_data", internalId: null, error: "spot.slug must be a non-empty string when present", values: itemObj, normalized: null };
+  }
+  if (country == null || region == null || heroImageUrl == null || teaserText == null || destinationSummary == null
     || destinationDescription == null || kiteContextDescription == null || nearestAirportName == null || nearestAirportCode == null
     || airportTransferTime == null || transportNote == null || googleMapsUrl == null || windyUrl == null || windfinderUrl == null
     || internalNotes == null || sourceNotes == null || seoTitleOverride == null || seoDescriptionOverride == null) {
@@ -455,18 +453,16 @@ function parseSpotJsonItem(
     return { rowNumber, kind: "error_invalid_data", internalId: null, error: "rankingMode must be manual or auto", values: itemObj, normalized: null };
   }
 
-  const matched = (matchPublicId ? spotByPublicId.get(matchPublicId) : undefined)
-    ?? (typeof matchId === "number" ? spotById.get(matchId) : undefined)
-    ?? (matchSlug ? spotBySlug.get(matchSlug) : undefined);
+  const matched = typeof matchId === "number" ? spotById.get(matchId) : undefined;
 
   return {
     rowNumber,
-    kind: matched ? "update" : "new",
-    internalId: matched?.id ?? null,
+    kind: matched ? "update" : matchId !== undefined ? "error_id_not_found" : "new",
+    internalId: matched?.id ?? (matchId ?? null),
     error: null,
     values: itemObj,
     normalized: {
-      slug: slug.trim(),
+      slug: slug?.trim() ?? null,
       name: name.trim(),
       country: country.trim(),
       region: region.trim(),
@@ -529,11 +525,9 @@ async function parseImportRowsFromSpotsJsonBase64(fileBase64: string): Promise<P
   if (obj.items.length > EXCEL_MAX_ROWS) throw new Error(`Maximum ${EXCEL_MAX_ROWS} items allowed`);
 
   const allSpots = await storage.listSpots(false);
-  const spotByPublicId = new Map<string, Spot>(allSpots.filter((s) => !!s.publicId).map((s) => [String(s.publicId), s]));
   const spotById = new Map<number, Spot>(allSpots.map((s) => [s.id, s]));
-  const spotBySlug = new Map<string, Spot>(allSpots.filter((s) => !!s.slug).map((s) => [String(s.slug), s]));
 
-  return obj.items.map((item, index) => parseSpotJsonItem(index + 2, item, spotByPublicId, spotById, spotBySlug));
+  return obj.items.map((item, index) => parseSpotJsonItem(index + 2, item, spotById));
 }
 function parseOptionalBoolean(value: unknown): boolean | "invalid" {
   if (typeof value === "boolean") return value;
@@ -568,7 +562,6 @@ function parseSchoolsJsonItem(
   item: unknown,
   knownSpotIds: Set<number>,
   schoolById: Map<number, any>,
-  schoolByName: Map<string, any>,
 ): ParsedImportRow {
   const allowedItemKeys = new Set(["match", "school", "spotIds"]);
   const allowedMatchKeys = new Set(["publicId", "id", "name"]);
@@ -641,7 +634,9 @@ function parseSchoolsJsonItem(
       return { rowNumber, kind: "error_invalid_data", internalId: null, error: `Unsupported match keys: ${unknownMatchKeys.join(", ")}`, values: itemObj, normalized: null };
     }
     if (matchObj.publicId !== undefined) {
-      return { rowNumber, kind: "error_id_not_found", internalId: null, error: "match.publicId is not supported for schools", values: itemObj, normalized: null };
+      if (typeof matchObj.publicId !== "string" || !matchObj.publicId.trim()) {
+        return { rowNumber, kind: "error_invalid_data", internalId: null, error: "match.publicId must be a non-empty string", values: itemObj, normalized: null };
+      }
     }
     if (matchObj.id !== undefined) {
       const id = Number(matchObj.id);
@@ -653,15 +648,12 @@ function parseSchoolsJsonItem(
         return { rowNumber, kind: "error_id_not_found", internalId: id, error: "match.id not found", values: itemObj, normalized: null };
       }
       internalId = existing.id;
-    } else if (matchObj.name !== undefined) {
+    }
+    if (matchObj.name !== undefined) {
       if (typeof matchObj.name !== "string" || !matchObj.name.trim()) {
         return { rowNumber, kind: "error_invalid_data", internalId: null, error: "match.name must be a non-empty string", values: itemObj, normalized: null };
       }
-      internalId = schoolByName.get(matchObj.name.trim().toLowerCase())?.id ?? null;
     }
-  }
-  if (internalId == null) {
-    internalId = schoolByName.get(name.trim().toLowerCase())?.id ?? null;
   }
   return {
     rowNumber,
@@ -687,7 +679,6 @@ function parseStaysJsonItem(
   item: unknown,
   knownSpotIds: Set<number>,
   stayById: Map<number, any>,
-  stayByName: Map<string, any>,
 ): ParsedImportRow {
   const allowedItemKeys = new Set(["match", "stay", "spotIds"]);
   const allowedMatchKeys = new Set(["publicId", "id", "name"]);
@@ -749,7 +740,9 @@ function parseStaysJsonItem(
       return { rowNumber, kind: "error_invalid_data", internalId: null, error: `Unsupported match keys: ${unknownMatchKeys.join(", ")}`, values: itemObj, normalized: null };
     }
     if (matchObj.publicId !== undefined) {
-      return { rowNumber, kind: "error_id_not_found", internalId: null, error: "match.publicId is not supported for stays", values: itemObj, normalized: null };
+      if (typeof matchObj.publicId !== "string" || !matchObj.publicId.trim()) {
+        return { rowNumber, kind: "error_invalid_data", internalId: null, error: "match.publicId must be a non-empty string", values: itemObj, normalized: null };
+      }
     }
     if (matchObj.id !== undefined) {
       const id = Number(matchObj.id);
@@ -761,15 +754,12 @@ function parseStaysJsonItem(
         return { rowNumber, kind: "error_id_not_found", internalId: id, error: "match.id not found", values: itemObj, normalized: null };
       }
       internalId = existing.id;
-    } else if (matchObj.name !== undefined) {
+    }
+    if (matchObj.name !== undefined) {
       if (typeof matchObj.name !== "string" || !matchObj.name.trim()) {
         return { rowNumber, kind: "error_invalid_data", internalId: null, error: "match.name must be a non-empty string", values: itemObj, normalized: null };
       }
-      internalId = stayByName.get(matchObj.name.trim().toLowerCase())?.id ?? null;
     }
-  }
-  if (internalId == null) {
-    internalId = stayByName.get(name.trim().toLowerCase())?.id ?? null;
   }
   return {
     rowNumber,
@@ -803,8 +793,7 @@ async function parseImportRowsFromSchoolsJsonBase64(fileBase64: string): Promise
   const knownSpotIds = new Set((await storage.listSpots(false)).map((s) => s.id));
   const schoolsList = (await storage.listAllSchools({ page: 1, perPage: EXCEL_MAX_ROWS })).items;
   const schoolById = new Map<number, any>(schoolsList.map((s) => [s.id, s]));
-  const schoolByName = new Map<string, any>(schoolsList.map((s) => [String(s.name || "").trim().toLowerCase(), s]));
-  return obj.items.map((item, idx) => parseSchoolsJsonItem(idx + 2, item, knownSpotIds, schoolById, schoolByName));
+  return obj.items.map((item, idx) => parseSchoolsJsonItem(idx + 2, item, knownSpotIds, schoolById));
 }
 async function parseImportRowsFromStaysJsonBase64(fileBase64: string): Promise<ParsedImportRow[]> {
   const obj = parseJsonObjectBase64(fileBase64);
@@ -821,8 +810,7 @@ async function parseImportRowsFromStaysJsonBase64(fileBase64: string): Promise<P
   const knownSpotIds = new Set((await storage.listSpots(false)).map((s) => s.id));
   const staysList = (await storage.listAllStays({ page: 1, perPage: EXCEL_MAX_ROWS })).items;
   const stayById = new Map<number, any>(staysList.map((s) => [s.id, s]));
-  const stayByName = new Map<string, any>(staysList.map((s) => [String(s.name || "").trim().toLowerCase(), s]));
-  return obj.items.map((item, idx) => parseStaysJsonItem(idx + 2, item, knownSpotIds, stayById, stayByName));
+  return obj.items.map((item, idx) => parseStaysJsonItem(idx + 2, item, knownSpotIds, stayById));
 }
 function buildPreviewResponse(session: ExcelPreviewSession) {
   const category = session.category;
@@ -1834,7 +1822,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               } as any).run();
               createdCount++;
             } else if (row.internalId) {
-              db.update(spots).set({ ...payload, hasDraft: true, updatedAt: new Date().toISOString() } as any).where(eq(spots.id, row.internalId)).run();
+              // `slug` is optional in imports now; never write null into the NOT NULL slug column —
+              // preserve the existing DB slug when the payload has none.
+              const { slug: payloadSlug, ...payloadRest } = payload;
+              const updateSet: any = { ...payloadRest, hasDraft: true, updatedAt: new Date().toISOString() };
+              if (payloadSlug) updateSet.slug = payloadSlug;
+              db.update(spots).set(updateSet).where(eq(spots.id, row.internalId)).run();
               updatedCount++;
             }
           } else if (category === "schools") {
