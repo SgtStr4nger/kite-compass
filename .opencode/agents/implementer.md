@@ -52,66 +52,41 @@ Priority is **read-only** for you. You never change a `priority:*` label — it
 is set by the ticket-creator and adjusted by the planner. If you think it is
 wrong, say so in your final comment (the planner/user can correct it).
 
-## Working directory & git sync
+## Git sync (shared checkout)
 
-Your session runs in the main checkout (`kite-compass`), which is the shared,
-read-only home for planning/coordination and always stays on `main` + clean.
-You never edit it. Instead, at session start you create your OWN git worktree
-per issue and do ALL of your work — every read, edit, build, commit and push —
-inside it via absolute paths. That keeps you isolated from every other agent
-even though your session was launched in the main checkout. No manual steps
-are required from the user.
+You work directly in the shared checkout (`kite-compass`) — no worktrees, no
+per-issue directories. The checkout is shared with the planner, which always
+reads the current `main`. Keep it on `main` + clean whenever you are not
+actively editing, so the planner never sees your in-progress work.
 
-Run this once at session start (bash):
+Workflow:
+1. `git fetch origin` — ALWAYS first, before reading anything.
+2. If the checkout is not already on a clean `main`, switch it:
+   `git switch main` then `git pull --ff-only origin main` (only when the
+   working tree is clean — never pull or switch over uncommitted changes).
+3. Create a fresh branch off `origin/main` (never off the local `main` or
+   another feature branch — those can be stale): `{N}` = issue number,
+   `{slug}` = short kebab-case name:
+   `git switch -c "feat/{N}-{slug}" origin/main`
+4. Implement, run `npm run check` / `npm run build`, commit, push. The
+   pipeline opens the PR from your branch.
+5. After pushing, restore the shared checkout so the planner reads current
+   main: `git switch main && git pull --ff-only origin main`.
 
-```powershell
-git fetch origin
-# 1) clean up your own worktrees from previous issues whose PR already merged
-$repo = (Get-Location).Path
-$wtRoot = Join-Path (Split-Path $repo -Parent) "kite-compass.worktrees"
-Get-ChildItem $wtRoot -Directory -Filter "kc-impl-*" -ErrorAction SilentlyContinue | ForEach-Object {
-  $branch = git -C $_.FullName branch --show-current
-  git merge-base --is-ancestor $branch origin/main 2>$null
-  if ($LASTEXITCODE -eq 0) { git worktree remove $_.FullName --force }
-}
-git worktree prune
-# 2) create your own worktree for THIS issue (reuse if you are resuming)
-$wt = Join-Path $wtRoot "kc-impl-{N}"
-if (-not (Test-Path $wt)) {
-  git worktree add $wt -b "feat/{N}-{slug}" origin/main
-  npm ci --prefix $wt
-}
-```
-
-- Always branch fresh off `origin/main` (never off the local `main` or another
-  feature branch — those can be stale). `{N}` = issue number, `{slug}` = short
-  kebab-case name.
-- `$wt` is your absolute worktree path. After the setup, use it in EVERY tool
-  call: Read/Edit/Write/Glob/Grep target `$wt\...`, and every bash command
-  passes `workdir = $wt`. Never read or edit files relative to your session
-  directory (that is the main checkout). Never run `git checkout`/`git switch`/
-  `git pull` in the main checkout.
-- Before building, sync: `git -C $wt fetch origin` then
-  `git -C $wt rebase origin/main` (or `git -C $wt merge --ff-only origin/main`
-  when clean). Never analyze or build against a stale tree — "pull first"
-  alone is not enough when the tree is shared; your worktree is the isolation.
-- `.env` and `data.db` are per-worktree and only needed to RUN the server, not
-  for `npm run check`/`build`.
-- Work as usual inside `$wt`: implement, run `npm run check` / `npm run build`
-  (workdir `$wt`), commit, push (`git -C $wt ...`). The pipeline opens the PR
-  from your branch.
-- After pushing, boot the worktree's server so the user can inspect the result:
-  from the main checkout run `./scripts/serve-worktree.ps1 -Issue {N}`. It
-  starts `npm run dev` on port `{5000+N}` (detached, logs to `dev-server.log`
-  in the worktree) and opens a browser window with the frontend and the admin
-  panel in two tabs. The admin account and content are copied from the main
-  checkout's `data.db` on first boot, so no admin re-setup is needed.
-- Leave your worktree in place while the PR is open; the cleanup at the top of
-  your next session removes it once the PR has merged.
+Notes:
+- Run only ONE implementer at a time in this checkout. Two implementers in
+  parallel would still fight over the same working tree — real parallelism
+  would require the worktree setup we just removed.
+- If the checkout has uncommitted changes when you start (e.g. a crashed
+  session), deal with them first; never `git pull`/`git switch` over a dirty
+  tree.
+- `.env` and `data.db` live in the checkout and are git-ignored; they are
+  shared and need no per-issue setup.
 
 ## Rules
-- Work in your own worktree on a branch created fresh from `origin/main` (see
-  "Working directory & git sync"), then commit and push.
+- Work on a branch created fresh from `origin/main` (see "Git sync"), then
+  commit and push. After pushing, restore the shared checkout to `main` so the
+  planner reads current main.
 - After pushing, the pipeline will open a PR; mention it in your final message
   and reference the issue number in the PR body.
 - Follow the project conventions in AGENTS.md and the existing code style.

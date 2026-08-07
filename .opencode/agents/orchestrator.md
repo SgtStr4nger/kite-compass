@@ -101,5 +101,5 @@ tickets"). Flow:
   delegating, run `git fetch origin` (and `git pull --ff-only origin main` only
   if it is on `main` and clean) so the planners analyze the latest code. Never
   `git checkout`/`git switch`/`git pull` on the main checkout otherwise, and
-  never edit files — implementers work in their own per-issue worktrees (see
-  implementer.md).
+  never edit files — implementers work directly in the checkout on a branch
+  and restore `main` when done (see implementer.md).
