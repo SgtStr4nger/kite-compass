@@ -63,6 +63,48 @@ new ticket ─► status:needs-planner ─► status:planner-working ─► stat
 | `status:needs-review` | Implementation done (PR open); planner reviews | implementer |
 | `status:done` | Reviewed & complete; safe to close | planner |
 
+### Priority labels (`priority:*`)
+
+Priority is an **initial assumption that can be corrected** — it only breaks
+ties when several issues carry the same `status:*` label; it never changes who
+owns an issue.
+
+| Label | Meaning | Initial set by | Adjusted by |
+| --- | --- | --- | --- |
+| `priority:p0` | Critical — blocks release, breaks the product, security/data loss | ticket-creator | planner |
+| `priority:p1` | High — significant user impact, core experience, high value | ticket-creator | planner |
+| `priority:p2` | Normal — the default for most tickets | ticket-creator | planner |
+| `priority:p3` | Low — nice-to-have, minor, can wait | ticket-creator | planner |
+
+- The **ticket-creator** assigns the initial `priority:*` at creation as a
+  best-effort guess (default `p2` when unsure). Never create a ticket without
+  one.
+- The **planner** re-evaluates it during analysis and adjusts the label (up or
+  down) when the plan is published, stating the change in the plan's
+  "Priority assessment" section. The orchestrator applies the planner's verdict
+  when posting plans in a batch.
+- The **implementer** never changes `priority:*` — it only uses it for ordering
+  and may flag a wrong priority in its final comment.
+- Ordering everywhere (planner, implementer, orchestrator): `p0` > `p1` > `p2` >
+  `p3`, then issues with no `priority:*` label last. All issue lists should
+  show the priority label so humans can re-rank cheaply.
+
+### Proposing new tickets
+
+Any agent may propose a new ticket (e.g. a docs gap or uncovered edge case it
+finds while planning/implementing). Rules:
+
+- Proposals are surfaced to the user — in chat or as a `## Suggested new
+  ticket` section in a plan/comment — with title, why, rough scope, and
+  suggested `type:*`/`area:*`/`priority:*`. Never create a ticket silently.
+- Only the **ticket-creator** creates issues, and only after the user
+  explicitly confirms. The proposing agent then invokes the ticket-creator via
+  the Task tool with the confirmed description; the ticket-creator applies the
+  full label set (type/area/priority/`status:needs-planner`).
+- A proposed ticket does not change the current issue's plan, status, or
+  priority — it is a separate follow-up that enters the normal
+  `status:needs-planner` queue.
+
 Rules for every agent:
 
 - Pick up only issues whose `status:*` label matches your role. Skip the rest.
