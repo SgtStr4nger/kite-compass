@@ -97,3 +97,9 @@ tickets"). Flow:
 - Only the PLANNER and TICKET-CREATOR subagents may be invoked. Never use other agents.
 - Never modify files. Do not implement anything.
 - Batch the whole list, then report — don't stop after the first issue.
+- Work read-only from the MAIN checkout and keep it on `main` + clean. Before
+  delegating, run `git fetch origin` (and `git pull --ff-only origin main` only
+  if it is on `main` and clean) so the planners analyze the latest code. Never
+  `git checkout`/`git switch`/`git pull` on the main checkout otherwise, and
+  never edit files — implementers work in their own per-issue worktrees (see
+  implementer.md).

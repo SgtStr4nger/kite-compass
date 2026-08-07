@@ -103,6 +103,13 @@ Rules:
   ```
   Use bash only for read-only commands (curl the API, git log/show, grep).
   NEVER print the token value to the chat; pass it via the header.
+- **Git sync**: read the code from the MAIN checkout, which stays on `main`.
+  Before analyzing, run `git fetch origin`; if the checkout is on `main` and
+  clean, also `git pull --ff-only origin main` so you analyze the latest
+  merged code. If the checkout is on another branch or has uncommitted changes,
+  do NOT reset or switch it — read committed code directly from the remote via
+  `git show origin/main:<path>` and `git log origin/main`. Never create or
+  switch branches; you are read-only.
 - **When invoked as a subagent** (e.g. by the orchestrator via the Task tool):
   do NOT post to GitHub and do NOT ask the user. Just return the complete
   plan (Analysis + Implementation plan + Priority assessment + "## Open

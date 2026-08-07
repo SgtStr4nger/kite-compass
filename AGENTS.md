@@ -125,6 +125,18 @@ curl -s -X PATCH -H "Authorization: token ${GH_TOKEN}" -H "Accept: application/v
 
 ## Repo-specific workflow
 
+- **Working directories & git sync** (parallel-safety): the main checkout
+  (`kite-compass`) is the shared, read-only home for planning/coordination and
+  always stays on `main` + clean. Planners/orchestrator read code there after
+  `git fetch origin` (and `git pull --ff-only origin main` when clean) — never
+  checkout branches. **Implementers never work in the main checkout**: each
+  opens its own git worktree per issue, branched fresh from `origin/main`
+  (`git worktree add "../kite-compass.worktrees/kc-impl-{N}" -b "feat/{N}-{slug}" origin/main`),
+  syncs with `git fetch origin && git rebase origin/main` before building, and
+  removes the worktree after its PR merges. Each worktree needs its own
+  `npm install` and `.env`; `data.db` is git-ignored and per-worktree. "Pull
+  first" alone does not make parallel agents safe — isolation via worktrees
+  does. Full rules in the agent files.
 - The product spec (`Kite-Compas - specs v1.txt`) and `WORK_PACKAGE_PLAN.md` are **gitignored in this repo** and their authoritative copies live in the sibling git worktree `kite-compass.worktrees/kite-compass-spec-review-and-steps`. The work plan drives package-by-package implementation — read package scope from the spec, validate with `npm run check`/`npm run build`, and update the plan file when done.
 - Wind providers (`server/windProviders.ts`: Windy/Windfinder) are **stubs by design** — `fetchMonthly()` throws; no real API calls. Do not treat them as implemented integrations.
 - Open-Meteo enrichment thresholds/percentiles/window are constants at the top of `server/services/openMeteo.ts`; change them there. Results are written as drafts and preserve manual editorial fields.

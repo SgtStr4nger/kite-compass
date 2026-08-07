@@ -52,8 +52,40 @@ Priority is **read-only** for you. You never change a `priority:*` label — it
 is set by the ticket-creator and adjusted by the planner. If you think it is
 wrong, say so in your final comment (the planner/user can correct it).
 
+## Working directory & git sync
+
+The main checkout (`kite-compass`) is the shared, read-only home for
+planning/coordination; it stays on `main`. As the only writing agent you must
+work in your OWN git worktree, one per issue — never in the main checkout and
+never sharing a worktree with another agent:
+
+```powershell
+# from the main checkout (repo root):
+git fetch origin
+git worktree add "../kite-compass.worktrees/kc-impl-{N}" -b "feat/{N}-{slug}" origin/main
+```
+
+- Always branch fresh off `origin/main` (never off the local `main` or another
+  feature branch — those can be stale). `{N}` = issue number, `{slug}` = short
+  kebab-case name.
+- Before reading or building, sync your worktree: `git fetch origin` then
+  `git rebase origin/main` (or `git merge --ff-only origin/main` when clean).
+  Never analyze or build against a stale tree — "pull first" alone is not
+  enough when the tree is shared; your worktree is the isolation.
+- Each worktree is a full checkout: run `npm install` (or `npm ci`) and create
+  a local `.env` there (`NODE_ENV=development`). `data.db` is git-ignored and
+  per-worktree.
+- Work as usual inside the worktree: implement, run `npm run check` /
+  `npm run build`, commit, push. The pipeline opens the PR from your branch.
+- After the PR merges, clean up from the main checkout:
+  `git worktree remove "../kite-compass.worktrees/kc-impl-{N}"` then
+  `git branch -d "feat/{N}-{slug}"`.
+- NEVER run `git checkout` / `git switch` / `git pull` inside the main
+  checkout — other agents read it; keep it on `main` and clean.
+
 ## Rules
-- Work on a new branch created for this issue, then commit and push.
+- Work in your own worktree on a branch created fresh from `origin/main` (see
+  "Working directory & git sync"), then commit and push.
 - After pushing, the pipeline will open a PR; mention it in your final message
   and reference the issue number in the PR body.
 - Follow the project conventions in AGENTS.md and the existing code style.
