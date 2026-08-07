@@ -20,7 +20,7 @@
 
 import { storage } from "./storage";
 import { enrichSpot, enrichSpotById, enrichSpotBySlug, MissingCoordinatesError, type EnrichOptions } from "./services/enrichment";
-import { HISTORY_START_YEAR, HISTORY_END_YEAR, KITEABLE_WIND_THRESHOLD_KNOTS, KITEABLE_DAY_MIN_HOURS } from "./services/openMeteo";
+import { HISTORY_START_YEAR, HISTORY_END_YEAR, KITEABLE_WIND_THRESHOLD_KNOTS, KITEABLE_DAY_MIN_HOURS, KITEABLE_DAY_SUN_MARGIN_MINUTES } from "./services/openMeteo";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -33,7 +33,7 @@ async function main() {
   const delay = Number(arg("delay") ?? 300);
   const minKiteableHours = await resolveConfiguredThreshold();
   const enrichOptions: EnrichOptions = { kiteableDayMinHours: minKiteableHours };
-  console.log(`Open-Meteo enrichment — window ${HISTORY_START_YEAR}–${HISTORY_END_YEAR}, kiteable threshold ${KITEABLE_WIND_THRESHOLD_KNOTS} kn / ${minKiteableHours} h`);
+  console.log(`Open-Meteo enrichment — window ${HISTORY_START_YEAR}–${HISTORY_END_YEAR}, kiteable threshold ${KITEABLE_WIND_THRESHOLD_KNOTS} kn / ${minKiteableHours} h, kiteable window sunrise−${KITEABLE_DAY_SUN_MARGIN_MINUTES}min → sunset+${KITEABLE_DAY_SUN_MARGIN_MINUTES}min`);
   console.log("Enriched values are saved as DRAFTS. Review and publish in the admin.\n");
 
   // ── Single spot ──

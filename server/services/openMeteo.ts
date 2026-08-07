@@ -27,8 +27,16 @@
  * Marine daily aggregates:
  *   • wave_height_max, wave_period_max, wave_direction_dominant
  *
+ * ── Kiteable window ──────────────────────────────────────────────────
+ * The kiteable part of a day runs from sunrise − KITEABLE_DAY_SUN_MARGIN_MINUTES
+ * to sunset + KITEABLE_DAY_SUN_MARGIN_MINUTES (spec §13.4: 60 min each side).
+ * Since the window can cross midnight in UTC (sunrise near 00:00 UTC for
+ * UTC+3…+6 spots, sunset near 24:00 UTC for UTC−3…−5 spots), each hourly slot
+ * is tested against the day rows for its own date AND the neighbouring dates
+ * (D−1, D, D+1), and counted at most once.
+ *
  * ── Aggregation, per calendar month ──────────────────────────────────
- *   • avgKiteableWind10mKnots = mean wind speed across kiteable daylight hours only
+ *   • avgKiteableWind10mKnots = mean wind speed across kiteable hours only
  *   • kiteableDaysCount       = average number of days per month with at least
  *                               minKiteableHours kiteable hours (configurable;
  *                               falls back to KITEABLE_DAY_MIN_HOURS)
@@ -38,7 +46,7 @@
  *   • avgWavePeriodS   = mean of daily wave_period_max
  *   • dominantWaveDirectionDeg = circular mean of daily wave_direction_dominant
  *
- * NOTE: The public wind number now reflects daylight hours only. This is the
+ * NOTE: The public wind number now reflects kiteable hours only. This is the
  * most kite-relevant planning view and keeps the metric easy to explain.
  */
 
@@ -47,6 +55,11 @@
 export const KITEABLE_WIND_THRESHOLD_KNOTS = 15;
 /** A day counts as kiteable when it has at least this many kiteable daylight hours. */
 export const KITEABLE_DAY_MIN_HOURS = 2;
+/**
+ * The kiteable daily window starts this many minutes before local sunrise and
+ * ends this many minutes after local sunset (spec §13.4).
+ */
+export const KITEABLE_DAY_SUN_MARGIN_MINUTES = 60;
 /** Historical window (inclusive). 10 full years. */
 export const HISTORY_START_YEAR = 2015;
 export const HISTORY_END_YEAR = 2024;
@@ -137,6 +150,23 @@ function percentile(values: number[], p: number): number | null {
 }
 const monthIndexFromISO = (d: string) => Number(d.slice(5, 7)) - 1; // "YYYY-MM-DD" → 0..11
 
+/**
+ * Shift a UTC ISO timestamp by a number of minutes and return it in the same
+ * 16-char "YYYY-MM-DDTHH:MM" format the Open-Meteo Archive API returns for
+ * sunrise/sunset and hourly times (lexicographic comparison stays valid).
+ * Accepts the old 19-char "…THH:MM:SSZ" fallback form defensively.
+ */
+function shiftIsoMinutes(iso: string, deltaMin: number): string {
+  const ms = Date.parse(iso.length === 16 ? `${iso}:00Z` : iso);
+  return new Date(ms + deltaMin * 60_000).toISOString().slice(0, 16);
+}
+
+/** Shift a "YYYY-MM-DD" date by a number of days (UTC-safe, handles month/year rollover). */
+const shiftDate = (d: string, days: number) => {
+  const [y, m, dd] = d.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, dd + days)).toISOString().slice(0, 10);
+};
+
 async function fetchJson(url: string): Promise<any> {
   const isArchive = url.includes("archive-api.open-meteo.com");
   const isMarine = url.includes("marine-api.open-meteo.com");
@@ -183,8 +213,8 @@ export async function enrichCoordinate(latitude: number, longitude: number, minK
 
   const dayMap = new Map<string, {
     monthIndex: number;
-    sunrise: string;
-    sunset: string;
+    windowStart: string;
+    windowEnd: string;
     kiteableWindSum: number;
     kiteableWindCount: number;
     kiteableHourCount: number;
@@ -204,10 +234,12 @@ export async function enrichCoordinate(latitude: number, longitude: number, minK
   const sunset: string[] = wind?.daily?.sunset ?? [];
   for (let i = 0; i < dayTime.length; i++) {
     const date = dayTime[i];
+    const rawSunrise = sunrise[i] ?? `${date}T${DEFAULT_DAYLIGHT_START}`;
+    const rawSunset = sunset[i] ?? `${date}T${DEFAULT_DAYLIGHT_END}`;
     dayMap.set(date, {
       monthIndex: monthIndexFromISO(date),
-      sunrise: sunrise[i] ?? `${date}T${DEFAULT_DAYLIGHT_START}:00Z`,
-      sunset: sunset[i] ?? `${date}T${DEFAULT_DAYLIGHT_END}:00Z`,
+      windowStart: shiftIsoMinutes(rawSunrise, -KITEABLE_DAY_SUN_MARGIN_MINUTES),
+      windowEnd: shiftIsoMinutes(rawSunset, +KITEABLE_DAY_SUN_MARGIN_MINUTES),
       kiteableWindSum: 0,
       kiteableWindCount: 0,
       kiteableHourCount: 0,
@@ -219,11 +251,18 @@ export async function enrichCoordinate(latitude: number, longitude: number, minK
   for (let i = 0; i < hourlyTimes.length; i++) {
     const time = hourlyTimes[i];
     const date = time.slice(0, 10);
-    const day = dayMap.get(date);
-    if (!day) continue;
-    if (time < day.sunrise || time >= day.sunset) continue;
+    if (!dayMap.has(date)) continue;
     const w = hourlyWind[i];
     if (w == null || !Number.isFinite(w)) continue;
+    // The kiteable window can cross midnight UTC (sunrise−60min lands on the
+    // previous UTC date, sunset+60min on the next), so test the hour against the
+    // day rows for its own date AND the neighbouring dates; count it at most once.
+    const inWindow = (day: { windowStart: string; windowEnd: string } | undefined) =>
+      day != null && time >= day.windowStart && time < day.windowEnd;
+    const day = dayMap.get(date)!; // guarded by dayMap.has(date) above
+    if (!(inWindow(day) ||
+          inWindow(dayMap.get(shiftDate(date, -1))) ||
+          inWindow(dayMap.get(shiftDate(date, 1))))) continue;
     if (w >= KITEABLE_WIND_THRESHOLD_KNOTS) {
       day.kiteableHourCount++;
       day.kiteableWindSum += w;
