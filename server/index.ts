@@ -19,6 +19,9 @@ declare module "http" {
 
 app.use(
   express.json({
+    // Imports (admin JSON/Excel content import) send the file base64-encoded in the
+    // JSON body; the Express default of 100kb rejects even moderately sized exports.
+    limit: "25mb",
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
