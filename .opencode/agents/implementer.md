@@ -54,34 +54,55 @@ wrong, say so in your final comment (the planner/user can correct it).
 
 ## Working directory & git sync
 
-The main checkout (`kite-compass`) is the shared, read-only home for
-planning/coordination; it stays on `main`. As the only writing agent you must
-work in your OWN git worktree, one per issue — never in the main checkout and
-never sharing a worktree with another agent:
+Your session runs in the main checkout (`kite-compass`), which is the shared,
+read-only home for planning/coordination and always stays on `main` + clean.
+You never edit it. Instead, at session start you create your OWN git worktree
+per issue and do ALL of your work — every read, edit, build, commit and push —
+inside it via absolute paths. That keeps you isolated from every other agent
+even though your session was launched in the main checkout. No manual steps
+are required from the user.
+
+Run this once at session start (bash):
 
 ```powershell
-# from the main checkout (repo root):
 git fetch origin
-git worktree add "../kite-compass.worktrees/kc-impl-{N}" -b "feat/{N}-{slug}" origin/main
+# 1) clean up your own worktrees from previous issues whose PR already merged
+$repo = (Get-Location).Path
+$wtRoot = Join-Path (Split-Path $repo -Parent) "kite-compass.worktrees"
+Get-ChildItem $wtRoot -Directory -Filter "kc-impl-*" -ErrorAction SilentlyContinue | ForEach-Object {
+  $branch = git -C $_.FullName branch --show-current
+  git merge-base --is-ancestor $branch origin/main 2>$null
+  if ($LASTEXITCODE -eq 0) { git worktree remove $_.FullName --force }
+}
+git worktree prune
+# 2) create your own worktree for THIS issue (reuse if you are resuming)
+$wt = Join-Path $wtRoot "kc-impl-{N}"
+if (-not (Test-Path $wt)) {
+  git worktree add $wt -b "feat/{N}-{slug}" origin/main
+  npm ci --prefix $wt
+  if (Test-Path "$repo\.env") { Copy-Item "$repo\.env" "$wt\.env" }
+}
 ```
 
 - Always branch fresh off `origin/main` (never off the local `main` or another
   feature branch — those can be stale). `{N}` = issue number, `{slug}` = short
   kebab-case name.
-- Before reading or building, sync your worktree: `git fetch origin` then
-  `git rebase origin/main` (or `git merge --ff-only origin/main` when clean).
-  Never analyze or build against a stale tree — "pull first" alone is not
-  enough when the tree is shared; your worktree is the isolation.
-- Each worktree is a full checkout: run `npm install` (or `npm ci`) and create
-  a local `.env` there (`NODE_ENV=development`). `data.db` is git-ignored and
-  per-worktree.
-- Work as usual inside the worktree: implement, run `npm run check` /
-  `npm run build`, commit, push. The pipeline opens the PR from your branch.
-- After the PR merges, clean up from the main checkout:
-  `git worktree remove "../kite-compass.worktrees/kc-impl-{N}"` then
-  `git branch -d "feat/{N}-{slug}"`.
-- NEVER run `git checkout` / `git switch` / `git pull` inside the main
-  checkout — other agents read it; keep it on `main` and clean.
+- `$wt` is your absolute worktree path. After the setup, use it in EVERY tool
+  call: Read/Edit/Write/Glob/Grep target `$wt\...`, and every bash command
+  passes `workdir = $wt`. Never read or edit files relative to your session
+  directory (that is the main checkout). Never run `git checkout`/`git switch`/
+  `git pull` in the main checkout.
+- Before building, sync: `git -C $wt fetch origin` then
+  `git -C $wt rebase origin/main` (or `git -C $wt merge --ff-only origin/main`
+  when clean). Never analyze or build against a stale tree — "pull first"
+  alone is not enough when the tree is shared; your worktree is the isolation.
+- `.env` is only needed to run the dev server, not for `npm run check`/`build`;
+  `data.db` is git-ignored and per-worktree.
+- Work as usual inside `$wt`: implement, run `npm run check` / `npm run build`
+  (workdir `$wt`), commit, push (`git -C $wt ...`). The pipeline opens the PR
+  from your branch.
+- Leave your worktree in place while the PR is open; the cleanup at the top of
+  your next session removes it once the PR has merged.
 
 ## Rules
 - Work in your own worktree on a branch created fresh from `origin/main` (see
