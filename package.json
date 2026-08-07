@@ -11,7 +11,8 @@
     "db:push": "drizzle-kit push",
     "seed": "tsx server/seed.ts",
     "enrich": "tsx server/enrich.ts",
-    "recover-main-admin": "tsx server/recoverMainAdmin.ts"
+    "recover-main-admin": "tsx server/recoverMainAdmin.ts",
+    "test": "node --import tsx --test shared/scoring.test.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.4.0",

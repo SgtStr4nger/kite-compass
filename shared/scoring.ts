@@ -46,31 +46,47 @@ export const DEFAULT_SCORING_CONFIG: ScoringConfig = {
  * Validation schema for the scoring configuration submitted by the admin.
  * - `kiteableDayMinHours` (spec §14.5) is an integer in 1..6 and must not
  *   exceed the (submitted) `kiteableHoursMax`.
+ * - The four component weights must total 100% (spec §14.7), with float
+ *   tolerance because the IEEE sum of the defaults is 1.0000000000000002, so an
+ *   exact `=== 1` check would wrongly reject them.
  * - Other numeric fields keep loose finite-number checks — they were never
  *   validated before, so we do not introduce new bounds on them.
  */
-export const scoringConfigSchema = z.object({
-  startYear: z.number().finite(),
-  endYear: z.number().finite(),
-  kiteableDaysWeight: z.number().finite(),
-  kiteableHoursWeight: z.number().finite(),
-  windStrengthWeight: z.number().finite(),
-  gustinessWeight: z.number().finite(),
-  kiteableHoursMax: z.number().finite(),
-  kiteableDayMinHours: z.number().int().min(1).max(6),
-  windMinKnots: z.number().finite(),
-  windBestStartKnots: z.number().finite(),
-  windBestEndKnots: z.number().finite(),
-  windCutoffKnots: z.number().finite(),
-  gustMeanWeight: z.number().finite(),
-  gustGoodThresholdPct: z.number().finite(),
-  gustBadThresholdPct: z.number().finite(),
-  seasonPeakThreshold: z.number().finite(),
-  seasonSideThreshold: z.number().finite(),
-}).refine((cfg) => cfg.kiteableDayMinHours <= cfg.kiteableHoursMax, {
-  message: "kiteableDayMinHours must not exceed kiteableHoursMax",
-  path: ["kiteableDayMinHours"],
-});
+export const scoringConfigSchema = z
+  .object({
+    startYear: z.number().finite(),
+    endYear: z.number().finite(),
+    kiteableDaysWeight: z.number().finite().min(0).max(1),
+    kiteableHoursWeight: z.number().finite().min(0).max(1),
+    windStrengthWeight: z.number().finite().min(0).max(1),
+    gustinessWeight: z.number().finite().min(0).max(1),
+    kiteableHoursMax: z.number().finite(),
+    kiteableDayMinHours: z.number().int().min(1).max(6),
+    windMinKnots: z.number().finite(),
+    windBestStartKnots: z.number().finite(),
+    windBestEndKnots: z.number().finite(),
+    windCutoffKnots: z.number().finite(),
+    gustMeanWeight: z.number().finite(),
+    gustGoodThresholdPct: z.number().finite(),
+    gustBadThresholdPct: z.number().finite(),
+    seasonPeakThreshold: z.number().finite(),
+    seasonSideThreshold: z.number().finite(),
+  })
+  .refine((cfg) => cfg.kiteableDayMinHours <= cfg.kiteableHoursMax, {
+    message: "kiteableDayMinHours must not exceed kiteableHoursMax",
+    path: ["kiteableDayMinHours"],
+  })
+  .refine(
+    (config) =>
+      Math.abs(
+        config.kiteableDaysWeight +
+          config.kiteableHoursWeight +
+          config.windStrengthWeight +
+          config.gustinessWeight -
+          1
+      ) < 1e-6,
+    { message: "Score weights must total 100%" }
+  );
 
 export interface MonthlyScoreInput {
   month?: string | null;
@@ -163,6 +179,21 @@ function scoreGustiness(meanPct: number | null, p90Pct: number | null, cfg: Scor
   return clamp((1 - progress) * 10, 0, 10);
 }
 
+/**
+ * Spec §14.8: when the gustiness component is unavailable its weight is
+ * redistributed proportionally across the remaining components — each surviving
+ * weight gains `weight × (omittedWeight / (1 - omittedWeight))`.
+ *
+ * Degenerate-config guard: `omittedWeight >= 1` would make the divisor
+ * non-positive, so no redistribution happens (callers still divide by the
+ * actual included total weight, keeping the result finite).
+ */
+export function redistributeOmittedWeight(weights: number[], omittedWeight: number): number[] {
+  const boost = omittedWeight < 1 ? omittedWeight / (1 - omittedWeight) : 0;
+  if (boost <= 0) return [...weights];
+  return weights.map((weight) => weight * (1 + boost));
+}
+
 export function calculateAutoMonthlyScore(row: MonthlyScoreInput, config: Partial<ScoringConfig> = {}): number | null {
   const cfg: ScoringConfig = { ...DEFAULT_SCORING_CONFIG, ...config };
   const wind = toFiniteNumber(row.avgKiteableWind10mKnots ?? row.averageBaseWind);
@@ -181,7 +212,20 @@ export function calculateAutoMonthlyScore(row: MonthlyScoreInput, config: Partia
 
   const gustiness = scoreGustiness(toFiniteNumber(row.gustLoadMeanPct), toFiniteNumber(row.gustLoadP90Pct), cfg);
   if (gustiness != null) {
+    // Spec §14.7: gustiness evaluable → all four configured weights used unchanged.
     componentScores.push({ score: gustiness, weight: cfg.gustinessWeight });
+  } else {
+    // Spec §14.8: gustiness unavailable → redistribute its weight proportionally
+    // across the remaining components. Triggered by null gustLoadMeanPct /
+    // gustLoadP90Pct; when the #55 gust pipeline lands (fetch, mean/P90,
+    // coverage < 80% → null), this branch keeps working unchanged.
+    const redistributed = redistributeOmittedWeight(
+      componentScores.map((part) => part.weight),
+      cfg.gustinessWeight
+    );
+    componentScores.forEach((part, index) => {
+      part.weight = redistributed[index];
+    });
   }
 
   const totalWeight = componentScores.reduce((sum, part) => sum + part.weight, 0);
