@@ -13,7 +13,7 @@ import {
   CommandSeparator,
 } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { EXPLORE_CONTINENTS, getContinentForCountry, type ExploreContinent } from "@shared/locations";
+import { EXPLORE_CONTINENTS, getContinentForCountry, countryNameForCode, type ExploreContinent } from "@shared/locations";
 
 export interface LocationValue {
   continents: ExploreContinent[];
@@ -88,6 +88,9 @@ export function LocationPicker({
   };
 
   const selectedLocations = [...value.continents, ...value.countries];
+  // Chips/values hold ISO codes for countries; render their English names.
+  const displayLabel = (loc: string) =>
+    EXPLORE_CONTINENTS.includes(loc as ExploreContinent) ? loc : countryNameForCode(loc);
   const totalSelected = selectedLocations.length;
   const visibleChips = selectedLocations.slice(0, MAX_VISIBLE_CHIPS);
   const hiddenChips = totalSelected - visibleChips.length;
@@ -122,7 +125,7 @@ export function LocationPicker({
               <span className="flex flex-wrap items-center gap-1.5">
                 {visibleChips.map((location) => (
                   <Badge key={location} variant="secondary" className="gap-1">
-                    {location}
+                    {displayLabel(location)}
                     <span
                       role="button"
                       tabIndex={-1}
@@ -187,7 +190,7 @@ export function LocationPicker({
                       return (
                         <CommandItem
                           key={country}
-                          value={country}
+                          value={`${countryNameForCode(country)} ${country}`}
                           onSelect={() => toggleCountry(country)}
                           data-testid={`location-country-${country}`}
                         >

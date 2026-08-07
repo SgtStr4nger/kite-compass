@@ -76,6 +76,8 @@ export const spots = sqliteTable("spots", {
   weatherLastError: text("weather_last_error"),             // last enrichment error message
   weatherCoordUpdatedAt: text("weather_coord_updated_at"),  // set when lat/lng/onshore change
   weatherHasManualChanges: integer("weather_has_manual_changes", { mode: "boolean" }).default(false),
+  // true when the country was set manually (admin override); auto-derived from coords otherwise
+  countryManual: integer("country_manual", { mode: "boolean" }).default(false),
   // draft/publish
   published: integer("published", { mode: "boolean" }).default(false),
   hasDraft: integer("has_draft", { mode: "boolean" }).default(true),

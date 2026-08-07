@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AdminSpotListItem } from "@/lib/types";
+import { countryNameForCode } from "@shared/locations";
 import { useToast } from "@/hooks/use-toast";
 import { RefreshCw, AlertTriangle, Clock3, ArrowRight, ChevronDown, Search, CheckCircle2, Database } from "lucide-react";
 
@@ -47,7 +48,7 @@ export default function AdminData() {
   const visibleRows = dataRows
     .filter(s => view === "all" ? true : s.dataStatus === view)
     .filter(s => {
-      const haystack = `${s.name} ${s.country || ""}`.toLowerCase();
+      const haystack = `${s.name} ${s.country || ""} ${countryNameForCode(s.country)}`.toLowerCase();
       return haystack.includes(q.trim().toLowerCase());
     })
     .sort((a, b) => {
@@ -277,7 +278,7 @@ export default function AdminData() {
                   </td>
                   <td className="px-4 py-3">
                     <div className="font-medium text-foreground">{s.name}</div>
-                    <div className="text-xs text-muted-foreground">{s.country || "—"}</div>
+                    <div className="text-xs text-muted-foreground">{countryNameForCode(s.country) || "—"}</div>
                   </td>
                   <td className="px-4 py-3"><DataPill status={s.dataStatus as any} /></td>
                   <td className="px-4 py-3 text-muted-foreground">{s.dataLastRefreshedAt ? new Date(s.dataLastRefreshedAt).toLocaleString() : <span className="inline-flex items-center gap-1"><AlertTriangle className="h-3.5 w-3.5" /> Never</span>}</td>

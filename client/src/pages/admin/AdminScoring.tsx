@@ -13,6 +13,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { AdminSpotListItem, ScoringAdminState, ScoringConfig, SpotDetail, MONTHS, SEASON_META } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
 import { calculateAutoMonthlyScore, bestEvaluableScore, deriveSeasonLabelFromScore, resolveMonthlyScore } from "@shared/scoring";
+import { countryNameForCode } from "@shared/locations";
 import { ArrowLeft, Info, Search, UploadCloud } from "lucide-react";
 import { SeasonBadge } from "@/components/Badges";
 
@@ -123,7 +124,7 @@ export default function AdminScoring() {
   const filteredSpots = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return spots;
-    return spots.filter((spot) => [spot.name, spot.country, spot.region].filter(Boolean).join(" ").toLowerCase().includes(q));
+    return spots.filter((spot) => [spot.name, countryNameForCode(spot.country), spot.region].filter(Boolean).join(" ").toLowerCase().includes(q));
   }, [spots, search]);
 
   const previewRows = useMemo(() => {
@@ -261,7 +262,7 @@ export default function AdminScoring() {
                 >
                   <option value="">Select a spot</option>
                   {filteredSpots.map((spot) => (
-                    <option key={spot.id} value={spot.id}>{spot.name} — {spot.country || "—"}</option>
+                    <option key={spot.id} value={spot.id}>{spot.name} — {countryNameForCode(spot.country) || "—"}</option>
                   ))}
                 </select>
               </div>
@@ -274,7 +275,7 @@ export default function AdminScoring() {
                 <div className="space-y-4">
                   <div>
                     <h3 className="font-serif text-xl font-semibold text-foreground">{selectedSpot.name}</h3>
-                    <p className="text-sm text-muted-foreground">{[selectedSpot.region, selectedSpot.country].filter(Boolean).join(", ") || "—"}</p>
+                    <p className="text-sm text-muted-foreground">{[selectedSpot.region, countryNameForCode(selectedSpot.country)].filter(Boolean).join(", ") || "—"}</p>
                   </div>
 
                   <div className="flex gap-1" data-testid="season-strip-scoring-preview">

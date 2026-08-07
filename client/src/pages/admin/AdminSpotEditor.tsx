@@ -15,6 +15,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useToast } from "@/hooks/use-toast";
 import { SpotDetail, MonthlyRecord, MONTHS, tagLabel, School, Stay, SCHOOL_SPORTS, STAY_TYPES } from "@/lib/types";
+import { countryNameForCode } from "@shared/locations";
 import { ArrowLeft, Eye, Save, Trash2, Upload, Plus, CloudDownload, RefreshCw, CheckCircle2, AlertTriangle, CheckCheck, ChevronUp, ChevronDown, Link as LinkIcon } from "lucide-react";
 
 const SPOT_TYPES = ["flat-water", "chop", "waves", "lagoon", "foil", "freestyle"];
@@ -28,13 +29,13 @@ function slugify(s: string) {
 
 function automaticSpotSeoTitle(name: string | undefined, country: string | undefined) {
   const spotName = (name || "").trim() || "Spot";
-  const spotCountry = (country || "").trim() || "Unknown location";
+  const spotCountry = countryNameForCode(country).trim() || "Unknown location";
   return `${spotName}, ${spotCountry} – Kitesurfing Guide | Kite Compass`;
 }
 
 function automaticSpotSeoDescription(name: string | undefined, country: string | undefined) {
   const spotName = (name || "").trim() || "Spot";
-  const spotCountry = (country || "").trim() || "Unknown location";
+  const spotCountry = countryNameForCode(country).trim() || "Unknown location";
   return `Explore kitesurfing conditions, seasonality and travel information for ${spotName}, ${spotCountry}.`;
 }
 
@@ -62,6 +63,7 @@ export default function AdminSpotEditor() {
     spotTypes: [], riderLevels: [], vibeTags: [],
     seoTitleOverride: "", seoDescriptionOverride: "",
     sourceNotes: "", internalNotes: "", rankingMode: "auto",
+    countryManual: false,
     published: false, hasDraft: true,
   });
   const [monthly, setMonthly] = useState<MonthlyRecord[]>([]);
@@ -272,7 +274,7 @@ export default function AdminSpotEditor() {
           <Button variant="outline" onClick={preview} disabled={busy || !form.name} className="gap-2" data-testid="button-preview"><Eye className="h-4 w-4" /> Preview</Button>
           <Button variant="outline" onClick={saveSpot} disabled={busy} className="gap-2" data-testid="button-save-draft"><Save className="h-4 w-4" /> Save draft</Button>
           <div className="inline-flex">
-            <Button onClick={publishSpot} disabled={busy} className="rounded-r-none" data-testid="button-publish-spot-content">Publish content</Button>
+            <Button onClick={publishSpot} disabled={busy || !form.country} className="rounded-r-none" data-testid="button-publish-spot-content">Publish content</Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" disabled={busy} className="rounded-l-none border-l-0 px-2" data-testid="button-publish-spot-menu">
@@ -301,7 +303,34 @@ export default function AdminSpotEditor() {
           <Field label="Slug (URL)" hint="Used in the address, e.g. /spots/el-medano"><Input value={form.slug || ""} onChange={e => set("slug", slugify(e.target.value))} data-testid="input-slug" /></Field>
           <Field label="Public ID" hint="Stable identifier for exports and imports"><Input value={form.publicId || "—"} disabled data-testid="input-public-id" /></Field>
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Country"><Input value={form.country || ""} onChange={e => set("country", e.target.value)} data-testid="input-country" /></Field>
+            <Field label="Country">
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <Input
+                    value={countryNameForCode(form.country)}
+                    onChange={e => { set("country", e.target.value); set("countryManual", true); }}
+                    placeholder="Auto-detected from coordinates"
+                    data-testid="input-country"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0"
+                    onClick={async () => { set("countryManual", false); await saveSpot(); }}
+                    disabled={!hasCoords}
+                    data-testid="button-country-reset"
+                  >
+                    Reset to automatic
+                  </Button>
+                </div>
+                {!form.country && hasCoords ? (
+                  <p className="flex items-start gap-1.5 text-xs text-amber-700" data-testid="text-country-hint">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> Auto-detection failed — enter the country manually (required for publishing).
+                  </p>
+                ) : null}
+              </div>
+            </Field>
             <Field label="Region"><Input value={form.region || ""} onChange={e => set("region", e.target.value)} data-testid="input-region" /></Field>
           </div>
           <div className="grid grid-cols-2 gap-4">

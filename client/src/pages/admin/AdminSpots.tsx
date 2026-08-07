@@ -8,6 +8,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AdminSpotListItem, ExcelImportAction, ExcelImportHistoryItem, ExcelImportPreviewResponse } from "@/lib/types";
+import { countryNameForCode } from "@shared/locations";
 import { Plus, Search, Circle, CheckCircle2, PencilLine, BadgeInfo, ChevronDown, Download, SendHorizontal } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
@@ -54,7 +55,7 @@ export default function AdminSpots() {
   useEffect(() => { if (!token) navigate("/admin"); }, [token, navigate]);
   const { data: spots, isLoading, refetch } = useQuery<AdminSpotListItem[]>({ queryKey: ["/api/admin/spots"], enabled: !!token });
   const filtered = useMemo(() => {
-    const base = (spots ?? []).filter(s => s.name.toLowerCase().includes(q.toLowerCase()) || (s.country || "").toLowerCase().includes(q.toLowerCase()));
+    const base = (spots ?? []).filter(s => s.name.toLowerCase().includes(q.toLowerCase()) || (s.country || "").toLowerCase().includes(q.toLowerCase()) || countryNameForCode(s.country).toLowerCase().includes(q.toLowerCase()));
     return base.sort((a, b) => {
       let cmp = 0;
       if (sortBy === "name") cmp = a.name.localeCompare(b.name);
@@ -277,7 +278,7 @@ export default function AdminSpots() {
                     <input type="checkbox" checked={selectedIds.includes(s.id)} onChange={(e) => setSelectedIds(prev => e.target.checked ? Array.from(new Set([...prev, s.id])) : prev.filter(id => id !== s.id))} />
                   </td>
                   <td className="px-4 py-3 font-medium text-foreground">{s.name}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{s.country || "—"}</td>
+                  <td className="px-4 py-3 text-muted-foreground">{countryNameForCode(s.country) || "—"}</td>
                   <td className="px-4 py-3 text-center tabular-nums text-muted-foreground">{s.monthlyCount}</td>
                   <td className="px-4 py-3"><StatusPill published={s.published} hasDraft={s.hasDraft} /></td>
                   <td className="px-4 py-3"><DataPill status={s.dataStatus as any} /></td>
