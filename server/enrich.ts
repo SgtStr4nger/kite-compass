@@ -19,7 +19,7 @@
  */
 
 import { storage } from "./storage";
-import { enrichSpot, enrichSpotById, enrichSpotBySlug, MissingCoordinatesError } from "./services/enrichment";
+import { enrichSpot, enrichSpotById, enrichSpotBySlug, MissingCoordinatesError, type EnrichOptions } from "./services/enrichment";
 import { HISTORY_START_YEAR, HISTORY_END_YEAR, KITEABLE_WIND_THRESHOLD_KNOTS, KITEABLE_DAY_MIN_HOURS } from "./services/openMeteo";
 
 function arg(name: string): string | undefined {
@@ -31,7 +31,9 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 async function main() {
   const delay = Number(arg("delay") ?? 300);
-  console.log(`Open-Meteo enrichment — window ${HISTORY_START_YEAR}–${HISTORY_END_YEAR}, kiteable threshold ${KITEABLE_WIND_THRESHOLD_KNOTS} kn / ${KITEABLE_DAY_MIN_HOURS} h`);
+  const minKiteableHours = await resolveConfiguredThreshold();
+  const enrichOptions: EnrichOptions = { kiteableDayMinHours: minKiteableHours };
+  console.log(`Open-Meteo enrichment — window ${HISTORY_START_YEAR}–${HISTORY_END_YEAR}, kiteable threshold ${KITEABLE_WIND_THRESHOLD_KNOTS} kn / ${minKiteableHours} h`);
   console.log("Enriched values are saved as DRAFTS. Review and publish in the admin.\n");
 
   // ── Single spot ──
@@ -39,7 +41,7 @@ async function main() {
   const id = arg("id");
   if (slug || id) {
     try {
-      const out = slug ? await enrichSpotBySlug(slug) : await enrichSpotById(Number(id));
+      const out = slug ? await enrichSpotBySlug(slug, enrichOptions) : await enrichSpotById(Number(id), enrichOptions);
       console.log(`✓ ${out.name} (${out.slug}) — ${out.monthsWritten} months, ` +
         `wind ${out.windAvailable ? "ok" : "—"}, waves ${out.waveAvailable ? "ok" : "—"}` +
         (out.qualityNote ? `\n  note: ${out.qualityNote}` : ""));
@@ -64,7 +66,7 @@ async function main() {
   for (const s of spots) {
     if (s.latitude == null || s.longitude == null) { skipped.push(`${s.name} (${s.slug})`); continue; }
     try {
-      const out = await enrichSpot(s as any);
+      const out = await enrichSpot(s as any, enrichOptions);
       done++;
       console.log(`✓ ${out.name} — ${out.monthsWritten} months` +
         (out.waveAvailable ? ", waves ok" : ", no waves") +
@@ -86,3 +88,13 @@ async function main() {
 }
 
 main().then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1); });
+
+/** Resolve the published kiteable-day min-hours threshold, falling back to the constant. */
+async function resolveConfiguredThreshold(): Promise<number> {
+  try {
+    const scoring = await storage.getScoringContent();
+    const published = scoring.published.kiteableDayMinHours;
+    if (typeof published === "number" && Number.isFinite(published)) return published;
+  } catch { /* scoring settings not initialized yet */ }
+  return KITEABLE_DAY_MIN_HOURS;
+}

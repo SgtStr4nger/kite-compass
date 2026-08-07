@@ -31,6 +31,14 @@ const FIELD_GROUPS: Array<{ title: string; hint: string; fields: Array<{ key: ke
     hint: "Thresholds that shape the wind component before it is weighted.",
     fields: [
       { key: "kiteableHoursMax", label: "Max kiteable hours/day", step: "0.1", min: 0 },
+      {
+        key: "kiteableDayMinHours",
+        label: "Min kiteable hours/day",
+        step: "1",
+        min: 1,
+        max: 6,
+        helper: "A day counts as kiteable with at least this many kiteable daylight hours (spec §14.5). Must not exceed max kiteable hours/day. Changing this re-enriches and republishes weather for all spots.",
+      },
       { key: "windMinKnots", label: "Minimum wind (knots)", step: "0.1", min: 0 },
       { key: "windBestStartKnots", label: "Best wind start (knots)", step: "0.1", min: 0 },
       { key: "windBestEndKnots", label: "Best wind end (knots)", step: "0.1", min: 0 },

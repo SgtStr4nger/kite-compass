@@ -30,7 +30,8 @@
  * ── Aggregation, per calendar month ──────────────────────────────────
  *   • avgKiteableWind10mKnots = mean wind speed across kiteable daylight hours only
  *   • kiteableDaysCount       = average number of days per month with at least
- *                               KITEABLE_DAY_MIN_HOURS kiteable hours
+ *                               minKiteableHours kiteable hours (configurable;
+ *                               falls back to KITEABLE_DAY_MIN_HOURS)
  *   • avgKiteableHoursPerDay  = average kiteable hours per calendar day
  *   • avgWaveHeightM   = mean of daily wave_height_max
  *   • maxWaveHeightM   = max  of daily wave_height_max
@@ -45,7 +46,7 @@
 /** A day counts as kiteable when daylight hours hit this wind threshold. */
 export const KITEABLE_WIND_THRESHOLD_KNOTS = 15;
 /** A day counts as kiteable when it has at least this many kiteable daylight hours. */
-export const KITEABLE_DAY_MIN_HOURS = 3;
+export const KITEABLE_DAY_MIN_HOURS = 2;
 /** Historical window (inclusive). 10 full years. */
 export const HISTORY_START_YEAR = 2015;
 export const HISTORY_END_YEAR = 2024;
@@ -170,8 +171,11 @@ function yearsInWindow(): number {
  * marine-model gap (common for inland/lagoon spots) still yields wind data.
  * Throws only when the WIND fetch fails (wind is the core signal); wave failure
  * degrades gracefully and is recorded in qualityNote.
+ *
+ * `minKiteableHours` is the configurable threshold for what counts as a
+ * "kiteable day" (spec §14.5); defaults to the KITEABLE_DAY_MIN_HOURS constant.
  */
-export async function enrichCoordinate(latitude: number, longitude: number): Promise<EnrichmentResult> {
+export async function enrichCoordinate(latitude: number, longitude: number, minKiteableHours: number = KITEABLE_DAY_MIN_HOURS): Promise<EnrichmentResult> {
   const start = `${HISTORY_START_YEAR}-01-01`;
   const end = `${HISTORY_END_YEAR}-12-31`;
   const buckets = emptyBuckets();
@@ -233,7 +237,7 @@ export async function enrichCoordinate(latitude: number, longitude: number): Pro
     b.kiteableHourSum += day.kiteableHourCount;
     b.kiteableWindSum += day.kiteableWindSum;
     b.kiteableWindCount += day.kiteableWindCount;
-    if (day.kiteableHourCount >= KITEABLE_DAY_MIN_HOURS) b.kiteableDayHits++;
+    if (day.kiteableHourCount >= minKiteableHours) b.kiteableDayHits++;
   }
   const windAvailable = hourlyTimes.length > 0 && dayMap.size > 0;
 

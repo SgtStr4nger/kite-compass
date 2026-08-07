@@ -127,6 +127,7 @@ export interface ScoringConfig {
   windStrengthWeight: number;
   gustinessWeight: number;
   kiteableHoursMax: number;
+  kiteableDayMinHours: number;
   windMinKnots: number;
   windBestStartKnots: number;
   windBestEndKnots: number;

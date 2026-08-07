@@ -9,7 +9,7 @@ import { log } from "./log";
 import type { ListingsFilter, SeoContent, TrashCategory, RedirectRow, AdminErrorStatus } from "./storage";
 import { enrichSpotById, MissingCoordinatesError } from "./services/enrichment";
 import { getContinentForCountry } from "@shared/locations";
-import { bestEvaluableScore, calculateAutoMonthlyScore, deriveSeasonLabelFromScore, resolveMonthlyScore, type ScoringConfig } from "@shared/scoring";
+import { bestEvaluableScore, calculateAutoMonthlyScore, DEFAULT_SCORING_CONFIG, deriveSeasonLabelFromScore, resolveMonthlyScore, scoringConfigSchema, type ScoringConfig } from "@shared/scoring";
 import { insertSpotSchema, insertMonthlySchema, monthlyRecords, schools, spots, stays, spotSchools, spotStays } from "@shared/schema";
 import type { Spot, MonthlyRecord, InsertMonthly, InsertSchool, InsertStay } from "@shared/schema";
 
@@ -1006,6 +1006,23 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/**
+ * Validate + normalize an incoming scoring-config body. Missing fields fall back
+ * to the defaults (so a partial PATCH still resolves to a full config), then the
+ * merged object is validated with the scoring config schema. Throws on invalid
+ * input with the zod message — callers should map that to a 400.
+ */
+function parseScoringConfigBody(raw: unknown): ScoringConfig {
+  const incoming = (raw && typeof raw === "object" ? raw : {}) as Partial<ScoringConfig>;
+  const merged: ScoringConfig = { ...DEFAULT_SCORING_CONFIG, ...incoming };
+  const parsed = scoringConfigSchema.safeParse(merged);
+  if (!parsed.success) {
+    const first = parsed.error.issues[0];
+    throw new Error(first ? `${first.path.join(".")}: ${first.message}` : "Invalid scoring configuration");
+  }
+  return parsed.data;
+}
+
 type WeatherActionScope = "all" | "missing" | "filtered" | "selected";
 type SpotPublishMode = "content" | "weather" | "content-weather";
 function parseWeatherScope(raw: unknown): WeatherActionScope {
@@ -1029,6 +1046,99 @@ function scopeMatchesSpot(scope: WeatherActionScope, scopedIds: Set<number>, spo
   if (scope === "all") return true;
   if (scope === "missing") return !spot.dataLastRefreshedAt;
   return scopedIds.has(spot.id);
+}
+
+export interface WeatherRefreshFailure {
+  id: number;
+  slug: string;
+  error: string;
+}
+
+/**
+ * Shared Open-Meteo batch refresh: full wind + marine re-enrichment for the given
+ * spots, honoring the per-minute request budget and updating the weather-refresh
+ * progress state. Writes DRAFTS only (never auto-publishes — callers decide).
+ * Used by both the admin "Refresh weather data" endpoint and the scoring-publish
+ * re-enrichment path (when the kiteable-day threshold changed).
+ */
+async function runWeatherRefreshForSpots(spots: Spot[], opts: { kiteableDayMinHours?: number } = {}): Promise<{
+  updatedSpotIds: number[];
+  skipped: number;
+  failures: WeatherRefreshFailure[];
+}> {
+  const eligible = spots.filter(isEligibleForWeatherRefresh);
+  const missingCoords = spots.length - eligible.length;
+  const totalScoped = spots.length;
+  await storage.setWeatherRefreshStatus({
+    status: "Refreshing weather data",
+    totalSpots: eligible.length,
+    completedSpots: 0,
+    message: `Refreshing ${eligible.length} spot(s)`,
+    dismissible: false,
+    dismissed: false,
+  });
+  if (!eligible.length) {
+    const message = totalScoped
+      ? "No selected spots have valid coordinates"
+      : "No spots matched this refresh scope";
+    await storage.setWeatherRefreshStatus({
+      status: "Weather refresh completed",
+      totalSpots: 0,
+      completedSpots: 0,
+      message,
+      dismissible: true,
+      dismissed: false,
+    });
+    return { updatedSpotIds: [], skipped: totalScoped, failures: [] };
+  }
+
+  const updatedSpotIds: number[] = [];
+  const failures: WeatherRefreshFailure[] = [];
+  let windowStart = Date.now();
+  let estimatedRequestsInWindow = 0;
+
+  for (let i = 0; i < eligible.length; i++) {
+    const spot = eligible[i];
+    if (estimatedRequestsInWindow + ESTIMATED_REQUESTS_PER_SPOT_REFRESH > OPEN_METEO_MAX_REQUESTS_PER_MINUTE) {
+      const waitMs = OPEN_METEO_WINDOW_MS - (Date.now() - windowStart);
+      if (waitMs > 0) await sleep(waitMs);
+      windowStart = Date.now();
+      estimatedRequestsInWindow = 0;
+    }
+    try {
+      await enrichSpotById(spot.id, opts);
+      updatedSpotIds.push(spot.id);
+    } catch (e: any) {
+      const errMsg = String(e?.message ?? e);
+      failures.push({ id: spot.id, slug: spot.slug, error: errMsg });
+      void logError("Weather Enrichment", `Weather refresh failed for spot "${spot.name}": ${errMsg}`, `spot:${spot.id}`);
+    } finally {
+      estimatedRequestsInWindow += ESTIMATED_REQUESTS_PER_SPOT_REFRESH;
+      const completed = i + 1;
+      await storage.setWeatherRefreshStatus({
+        status: "Refreshing weather data",
+        totalSpots: eligible.length,
+        completedSpots: completed,
+        message: `Refreshing weather data (${completed}/${eligible.length})`,
+        dismissible: false,
+        dismissed: false,
+      });
+      if (i < eligible.length - 1) await sleep(REFRESH_SPOT_DELAY_MS);
+    }
+  }
+
+  const skipped = missingCoords + failures.length;
+  await storage.setWeatherRefreshStatus({
+    status: failures.length ? "Weather refresh failed" : "Weather refresh completed",
+    totalSpots: eligible.length,
+    completedSpots: eligible.length,
+    message: failures.length
+      ? `Completed with ${failures.length} failed spot(s)`
+      : `Refreshed ${updatedSpotIds.length} spot(s)`,
+    dismissible: true,
+    dismissed: false,
+  });
+  return { updatedSpotIds, skipped, failures };
 }
 
 /* ───────── Auth helpers (no cookies/localStorage — Bearer token) ───────── */
@@ -2322,7 +2432,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (weatherImportActive) return res.status(409).json({ error: "Weather import is already running" });
     weatherImportActive = true;
     try {
-      const out = await enrichSpotById(Number(req.params.id));
+      const scoring = await storage.getScoringContent();
+      const out = await enrichSpotById(Number(req.params.id), { kiteableDayMinHours: scoring.published.kiteableDayMinHours });
       res.json(out);
     } catch (e: any) {
       if (e instanceof MissingCoordinatesError) return res.status(422).json({ error: e.message });
@@ -2346,80 +2457,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       const spots = await storage.listSpots(false);
       const scopedSpots = spots.filter(spot => scopeMatchesSpot(scope, scopedIds, spot));
-      const eligible = scopedSpots.filter(isEligibleForWeatherRefresh);
-      const missingCoords = scopedSpots.length - eligible.length;
-      const totalScoped = scopedSpots.length;
-      await storage.setWeatherRefreshStatus({
-        status: "Refreshing weather data",
-        totalSpots: eligible.length,
-        completedSpots: 0,
-        message: `Refreshing ${eligible.length} spot(s)`,
-        dismissible: false,
-        dismissed: false,
+      const scoring = await storage.getScoringContent();
+      const { updatedSpotIds, skipped, failures } = await runWeatherRefreshForSpots(scopedSpots, {
+        kiteableDayMinHours: scoring.published.kiteableDayMinHours,
       });
-      if (!eligible.length) {
-        const message = totalScoped
-          ? "No selected spots have valid coordinates"
-          : "No spots matched this refresh scope";
-        await storage.setWeatherRefreshStatus({
-          status: "Weather refresh completed",
-          totalSpots: 0,
-          completedSpots: 0,
-          message,
-          dismissible: true,
-          dismissed: false,
-        });
-        return res.json({ scope, updated: 0, skipped: totalScoped, failed: 0, failures: [] });
-      }
-
-      let updated = 0;
-      let skipped = missingCoords;
-      const failures: { id: number; slug: string; error: string }[] = [];
-      let windowStart = Date.now();
-      let estimatedRequestsInWindow = 0;
-
-      for (let i = 0; i < eligible.length; i++) {
-        const spot = eligible[i];
-        if (estimatedRequestsInWindow + ESTIMATED_REQUESTS_PER_SPOT_REFRESH > OPEN_METEO_MAX_REQUESTS_PER_MINUTE) {
-          const waitMs = OPEN_METEO_WINDOW_MS - (Date.now() - windowStart);
-          if (waitMs > 0) await sleep(waitMs);
-          windowStart = Date.now();
-          estimatedRequestsInWindow = 0;
-        }
-        try {
-          await enrichSpotById(spot.id);
-          updated++;
-        } catch (e: any) {
-          const errMsg = String(e?.message ?? e);
-          failures.push({ id: spot.id, slug: spot.slug, error: errMsg });
-          void logError("Weather Enrichment", `Weather refresh failed for spot "${spot.name}": ${errMsg}`, `spot:${spot.id}`);
-        } finally {
-          estimatedRequestsInWindow += ESTIMATED_REQUESTS_PER_SPOT_REFRESH;
-          const completed = i + 1;
-          await storage.setWeatherRefreshStatus({
-            status: "Refreshing weather data",
-            totalSpots: eligible.length,
-            completedSpots: completed,
-            message: `Refreshing weather data (${completed}/${eligible.length})`,
-            dismissible: false,
-            dismissed: false,
-          });
-          if (i < eligible.length - 1) await sleep(REFRESH_SPOT_DELAY_MS);
-        }
-      }
-
-      if (failures.length) skipped += failures.length;
-      await storage.setWeatherRefreshStatus({
-        status: failures.length ? "Weather refresh failed" : "Weather refresh completed",
-        totalSpots: eligible.length,
-        completedSpots: eligible.length,
-        message: failures.length
-          ? `Completed with ${failures.length} failed spot(s)`
-          : `Refreshed ${updated} spot(s)`,
-        dismissible: true,
-        dismissed: false,
-      });
-      res.json({ scope, updated, skipped, failed: failures.length, failures });
+      res.json({ scope, updated: updatedSpotIds.length, skipped, failed: failures.length, failures });
     } catch (error) {
       await storage.setWeatherRefreshStatus({
         status: "Weather refresh failed",
@@ -2556,7 +2598,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.patch("/api/admin/scoring", requireAuth, async (req, res) => {
-    const next = { ...req.body } as ScoringConfig;
+    let next: ScoringConfig;
+    try {
+      next = parseScoringConfigBody(req.body);
+    } catch (e: any) {
+      return res.status(400).json({ error: e?.message ?? "Invalid scoring configuration" });
+    }
     const scoring = await storage.saveScoringDraft(next);
     res.json(scoring);
   });
@@ -2579,12 +2626,45 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/admin/scoring/publish", requireAuth, async (req, res) => {
     if (scoringRecalcActive) return res.status(409).json({ error: "score recalculation is already running" });
-    const next = { ...req.body } as ScoringConfig;
+    if (weatherImportActive) return res.status(409).json({ error: "Weather import is already running" });
+    let next: ScoringConfig;
+    try {
+      next = parseScoringConfigBody(req.body);
+    } catch (e: any) {
+      return res.status(400).json({ error: e?.message ?? "Invalid scoring configuration" });
+    }
     const scoring = await storage.saveScoringDraft(next);
-    void recalculateScoresForAllSpots(scoring.draft, true).catch((error) => {
-      void logError("Scoring Publish", `Score recalculation failed: ${error instanceof Error ? error.message : String(error)}`, null);
-    });
-    clearSitemapCache();
+
+    // Fast path — threshold unchanged: recalc-only (no Open-Meteo traffic).
+    if (scoring.draft.kiteableDayMinHours === scoring.published.kiteableDayMinHours) {
+      void recalculateScoresForAllSpots(scoring.draft, true).catch((error) => {
+        void logError("Scoring Publish", `Score recalculation failed: ${error instanceof Error ? error.message : String(error)}`, null);
+      });
+      clearSitemapCache();
+      return res.json({ ok: true });
+    }
+
+    // Threshold changed: re-enrich every spot with coordinates under the NEW
+    // threshold (writes drafts), recompute all scores with the new config, then
+    // auto-publish the refreshed spots so the new kiteable-day counts and scores
+    // go live immediately. Spots whose enrichment failed keep their old live data.
+    void (async () => {
+      try {
+        const spots = await storage.listSpots(false);
+        const spotsWithCoords = spots.filter(isEligibleForWeatherRefresh);
+        const refresh = await runWeatherRefreshForSpots(spotsWithCoords, {
+          kiteableDayMinHours: scoring.draft.kiteableDayMinHours,
+        });
+        await recalculateScoresForAllSpots(scoring.draft, true);
+        for (const id of refresh.updatedSpotIds) {
+          await storage.publishAllMonthlyForSpot(id);
+        }
+      } catch (error) {
+        void logError("Scoring Publish", `Scoring publish with weather refresh failed: ${error instanceof Error ? error.message : String(error)}`, null);
+      } finally {
+        clearSitemapCache();
+      }
+    })();
     res.json({ ok: true });
   });
 
