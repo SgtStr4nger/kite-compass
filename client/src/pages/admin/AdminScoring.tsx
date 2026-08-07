@@ -151,6 +151,13 @@ export default function AdminScoring() {
     setForm((current) => current ? { ...current, [key]: value } : current);
   };
 
+  // Spec §14.7: the four component weights must total 100%. Mirrors the
+  // server-side scoringConfigSchema validation (same float tolerance).
+  const weightSum = form
+    ? form.kiteableDaysWeight + form.kiteableHoursWeight + form.windStrengthWeight + form.gustinessWeight
+    : 0;
+  const weightsValid = Math.abs(weightSum - 1) < 1e-6;
+
   const publish = async () => {
     if (!form) return;
     setBusy(true);
@@ -186,7 +193,7 @@ export default function AdminScoring() {
           <Button variant="outline" onClick={dismiss} disabled={busy} data-testid="button-scoring-dismiss">
             Dismiss
           </Button>
-          <Button onClick={publish} disabled={busy || !form} data-testid="button-scoring-publish">
+          <Button onClick={publish} disabled={busy || !form || !weightsValid} data-testid="button-scoring-publish">
             <UploadCloud className="mr-2 h-4 w-4" /> {busy ? "Publishing…" : "Publish"}
           </Button>
         </div>
@@ -221,6 +228,11 @@ export default function AdminScoring() {
                       {field.helper ? <p className="text-xs text-muted-foreground">{field.helper}</p> : null}
                     </div>
                   ))}
+                  {group.title === "Score weights" ? (
+                    <p className={`text-xs sm:col-span-2 ${weightsValid ? "text-muted-foreground" : "text-red-500"}`}>
+                      Weights total: {Math.round(weightSum * 100)}% — must be 100%
+                    </p>
+                  ) : null}
                 </CardContent>
               </Card>
             ))}
