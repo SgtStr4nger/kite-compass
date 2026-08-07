@@ -80,7 +80,6 @@ $wt = Join-Path $wtRoot "kc-impl-{N}"
 if (-not (Test-Path $wt)) {
   git worktree add $wt -b "feat/{N}-{slug}" origin/main
   npm ci --prefix $wt
-  if (Test-Path "$repo\.env") { Copy-Item "$repo\.env" "$wt\.env" }
 }
 ```
 
@@ -96,11 +95,17 @@ if (-not (Test-Path $wt)) {
   `git -C $wt rebase origin/main` (or `git -C $wt merge --ff-only origin/main`
   when clean). Never analyze or build against a stale tree — "pull first"
   alone is not enough when the tree is shared; your worktree is the isolation.
-- `.env` is only needed to run the dev server, not for `npm run check`/`build`;
-  `data.db` is git-ignored and per-worktree.
+- `.env` and `data.db` are per-worktree and only needed to RUN the server, not
+  for `npm run check`/`build`.
 - Work as usual inside `$wt`: implement, run `npm run check` / `npm run build`
   (workdir `$wt`), commit, push (`git -C $wt ...`). The pipeline opens the PR
   from your branch.
+- After pushing, boot the worktree's server so the user can inspect the result:
+  from the main checkout run `./scripts/serve-worktree.ps1 -Issue {N}`. It
+  starts `npm run dev` on port `{5000+N}` (detached, logs to `dev-server.log`
+  in the worktree) and opens a browser window with the frontend and the admin
+  panel in two tabs. The admin account and content are copied from the main
+  checkout's `data.db` on first boot, so no admin re-setup is needed.
 - Leave your worktree in place while the PR is open; the cleanup at the top of
   your next session removes it once the PR has merged.
 

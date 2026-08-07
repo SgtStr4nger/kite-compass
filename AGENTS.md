@@ -136,7 +136,9 @@ curl -s -X PATCH -H "Authorization: token ${GH_TOKEN}" -H "Accept: application/v
   removes the worktree after its PR merges. Each worktree needs its own
   `npm install` and `.env`; `data.db` is git-ignored and per-worktree. "Pull
   first" alone does not make parallel agents safe — isolation via worktrees
-  does. Full rules in the agent files.
+  does. Full rules in the agent files. Each worktree serves its own dev server
+  on port `5000 + issue` (e.g. #40 → `:5040`); boot + browser (frontend +
+  admin tabs) via `./scripts/serve-worktree.ps1 -Issue {N}`.
 - The product spec (`Kite-Compas - specs v1.txt`) and `WORK_PACKAGE_PLAN.md` are **gitignored in this repo** and their authoritative copies live in the sibling git worktree `kite-compass.worktrees/kite-compass-spec-review-and-steps`. The work plan drives package-by-package implementation — read package scope from the spec, validate with `npm run check`/`npm run build`, and update the plan file when done.
 - Wind providers (`server/windProviders.ts`: Windy/Windfinder) are **stubs by design** — `fetchMonthly()` throws; no real API calls. Do not treat them as implemented integrations.
 - Open-Meteo enrichment thresholds/percentiles/window are constants at the top of `server/services/openMeteo.ts`; change them there. Results are written as drafts and preserve manual editorial fields.
