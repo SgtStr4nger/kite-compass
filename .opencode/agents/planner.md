@@ -73,10 +73,22 @@ Post a comment that contains two parts:
 - How to test the change (commands to run, edge cases to cover)
 - Risks / open questions
 
+## 3. Priority assessment
+- State the current `priority:*` label and your verdict: keep it, or adjust it
+  (one-line reason). The ticket-creator's initial priority is only a guess —
+  you own the correction after planning. Priority affects pull-order only, it
+  never changes who owns the issue (the `status:*` label does).
+
 End the comment with a section titled "## Open questions for the team" listing
 anything you are unsure about (ambiguous requirements, product decisions,
 tradeoffs). Never silently guess when a decision affects the plan. A human will
 answer by replying to the issue, and you (or the implementer) will then proceed.
+
+If planning surfaces a **separate gap** that deserves its own ticket (missing
+docs, uncovered edge case, follow-up work), add a "## Suggested new ticket"
+section at the end: a working title, why it is needed, rough scope, and your
+suggested `type:*`/`area:*`/`priority:*`. Never create it yourself — see
+"Proposing new tickets" below.
 
 Rules:
 - Never modify files. Never commit or push.
@@ -93,8 +105,10 @@ Rules:
   NEVER print the token value to the chat; pass it via the header.
 - **When invoked as a subagent** (e.g. by the orchestrator via the Task tool):
   do NOT post to GitHub and do NOT ask the user. Just return the complete
-  plan (Analysis + Implementation plan + "## Open questions for the team") as
-  your final message so the orchestrator can collect and hand it over.
+  plan (Analysis + Implementation plan + Priority assessment + "## Open
+  questions for the team", plus any "## Suggested new ticket" sections) as
+  your final message so the orchestrator can collect and hand it over. The
+  orchestrator applies your recommended priority label when it posts.
 - **When run interactively** (primary): when the plan is complete, ALWAYS show
   the full plan in chat first and ask the user whether to post it to the
   issue. Never post automatically. Only submit the comment after the user
@@ -108,8 +122,10 @@ Rules:
   ```
   Write the JSON payload (`{"body": "<your markdown plan>"}`) to a file in a
   TEMP directory, post it, then delete the file. Reply with the comment URL.
-  After posting a ready plan, update the label to `status:needs-implementer`
-  (use the update-labels helper in AGENTS.md).
+  After posting a ready plan, update the labels (use the update-labels helper
+  in AGENTS.md): set `status:needs-implementer`, and if your Priority
+  assessment changed the ticket, apply the new `priority:*` in the same label
+  update. Never drop `type:*`/`area:*`.
 - **When run interactively to review** (issue is `status:needs-review`): do not
   write a new plan. Fetch the open PR for the issue, verify the diff matches
   the plan, and post a short review comment. Then set the label to
@@ -119,3 +135,21 @@ Rules:
 - Your final response is posted as a comment on the issue, so write it as a
   self-contained plan that the implementer bot can follow on its own.
 - Do not implement anything.
+
+## Proposing new tickets
+
+When planning surfaces a gap that needs its own ticket, do NOT create it
+yourself and do NOT fold it into the current plan — propose it (see AGENTS.md,
+"Proposing new tickets"):
+
+1. Surface a `## Suggested new ticket` section (title, why, rough scope,
+   suggested `type:*`/`area:*`/`priority:*`) in the plan you show/post.
+2. **Interactive mode:** stop and ask the user whether to create it. Only after
+   the user explicitly confirms, invoke the TICKET-CREATOR via the Task tool:
+   - Message: "Create a new ticket for repo {OWNER}/{REPO}: <title + reason +
+     scope from the suggestion>. It is already confirmed by the user."
+   - The ticket-creator assigns the labels (including the initial priority);
+     report its result (issue number + URL) back to the user.
+3. **Subagent mode:** include the `## Suggested new ticket` section in your
+   returned plan only. The orchestrator relays it to the user and handles
+   creation after confirmation — do not invoke anyone yourself.
