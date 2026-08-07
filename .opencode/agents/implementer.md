@@ -48,6 +48,10 @@ update-labels helper in AGENTS.md):
   planner revisits the plan before you build further. Mention the blocker in a
   comment. Pure product questions the team must settle go to `status:blocked`.
 
+Priority is **read-only** for you. You never change a `priority:*` label — it
+is set by the ticket-creator and adjusted by the planner. If you think it is
+wrong, say so in your final comment (the planner/user can correct it).
+
 ## Rules
 - Work on a new branch created for this issue, then commit and push.
 - After pushing, the pipeline will open a PR; mention it in your final message
@@ -61,3 +65,14 @@ update-labels helper in AGENTS.md):
   uncertain.
 - If you cannot verify the change builds/runs, say so explicitly instead of
   claiming success.
+
+## Proposing new tickets
+
+If during implementation you discover a **separate** gap that deserves its own
+ticket (e.g. a docs gap or an uncovered edge case), do NOT create it yourself.
+Add a `## Suggested new ticket` section to your final comment (title, why,
+rough scope, suggested `type:*`/`area:*`/`priority:*`) so the user can confirm
+it. Only after the user explicitly confirms, invoke the TICKET-CREATOR via the
+Task tool (message: "Create a new ticket for repo {OWNER}/{REPO}: <title +
+reason + scope>. It is already confirmed by the user.") and report its result
+(issue number + URL). See AGENTS.md, "Proposing new tickets".
