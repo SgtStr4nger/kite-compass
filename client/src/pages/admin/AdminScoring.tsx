@@ -9,13 +9,14 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AdminSpotListItem, ScoringAdminState, ScoringConfig, SpotDetail, MONTHS, SEASON_META } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
 import { calculateAutoMonthlyScore, bestEvaluableScore, deriveSeasonLabelFromScore, resolveMonthlyScore } from "@shared/scoring";
-import { ArrowLeft, Search, UploadCloud } from "lucide-react";
+import { ArrowLeft, Info, Search, UploadCloud } from "lucide-react";
 import { SeasonBadge } from "@/components/Badges";
 
-const FIELD_GROUPS: Array<{ title: string; hint: string; fields: Array<{ key: keyof ScoringConfig; label: string; step?: string; min?: number; max?: number; helper?: string }> }> = [
+const FIELD_GROUPS: Array<{ title: string; hint: string; fields: Array<{ key: keyof ScoringConfig; label: string; step?: string; min?: number; max?: number; helper?: string; info?: string }> }> = [
   {
     title: "Score weights",
     hint: "Weights used by the monthly Travel Score formula.",
@@ -31,6 +32,14 @@ const FIELD_GROUPS: Array<{ title: string; hint: string; fields: Array<{ key: ke
     hint: "Thresholds that shape the wind component before it is weighted.",
     fields: [
       { key: "kiteableHoursMax", label: "Max kiteable hours/day", step: "0.1", min: 0 },
+      {
+        key: "kiteableDayMinHours",
+        label: "Min kiteable hours/day",
+        step: "1",
+        min: 1,
+        max: 6,
+        info: "Re-enriches and publishes weather data for all spots.",
+      },
       { key: "windMinKnots", label: "Minimum wind (knots)", step: "0.1", min: 0 },
       { key: "windBestStartKnots", label: "Best wind start (knots)", step: "0.1", min: 0 },
       { key: "windBestEndKnots", label: "Best wind end (knots)", step: "0.1", min: 0 },
@@ -57,6 +66,30 @@ const FIELD_GROUPS: Array<{ title: string; hint: string; fields: Array<{ key: ke
     ],
   },
 ];
+
+/** Info icon with tooltip next to a field label — shows on hover (fast) and toggles on click. */
+function FieldInfoIcon({ label, content }: { label: string; content: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Tooltip open={open} onOpenChange={setOpen} delayDuration={150}>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex items-center rounded-full p-0.5 text-muted-foreground transition-colors hover:text-foreground focus:outline-none"
+          aria-label={label}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setOpen((current) => !current);
+          }}
+        >
+          <Info className="h-3.5 w-3.5" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-64 text-sm">{content}</TooltipContent>
+    </Tooltip>
+  );
+}
 
 export default function AdminScoring() {
   const { token } = useAuth();
@@ -173,7 +206,10 @@ export default function AdminScoring() {
                 <CardContent className="grid gap-4 sm:grid-cols-2">
                   {group.fields.map((field) => (
                     <div key={String(field.key)} className="space-y-1.5">
-                      <Label>{field.label}</Label>
+                      <div className="flex items-center gap-1.5">
+                        <Label>{field.label}</Label>
+                        {field.info ? <FieldInfoIcon label={field.label} content={field.info} /> : null}
+                      </div>
                       <Input
                         type="number"
                         step={field.step}

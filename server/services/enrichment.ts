@@ -22,8 +22,26 @@
  */
 
 import { storage } from "../storage";
-import { enrichCoordinate, type EnrichmentResult } from "./openMeteo";
+import { enrichCoordinate, KITEABLE_DAY_MIN_HOURS, type EnrichmentResult } from "./openMeteo";
 import { bestEvaluableScore, calculateAutoMonthlyScore, deriveSeasonLabelFromScore } from "@shared/scoring";
+
+export interface EnrichOptions {
+  /** Configurable kiteable-day threshold (spec §14.5). Falls back to the published scoring config, then KITEABLE_DAY_MIN_HOURS. */
+  kiteableDayMinHours?: number;
+}
+
+/** Resolve the kiteable-day minimum-hours threshold from explicit option → published scoring config → constant. */
+async function resolveKiteableDayMinHours(options?: EnrichOptions): Promise<number> {
+  if (options?.kiteableDayMinHours != null && Number.isFinite(options.kiteableDayMinHours)) {
+    return options.kiteableDayMinHours;
+  }
+  try {
+    const scoring = await storage.getScoringContent();
+    const published = scoring.published.kiteableDayMinHours;
+    if (typeof published === "number" && Number.isFinite(published)) return published;
+  } catch { /* settings row may not be initialized yet — fall through to the constant */ }
+  return KITEABLE_DAY_MIN_HOURS;
+}
 
 export interface EnrichSpotOutcome {
   ok: boolean;
@@ -106,12 +124,13 @@ export async function enrichSpot(spot: {
   id: number; slug: string; name: string;
   latitude: number | null; longitude: number | null;
   published?: boolean | null;
-}): Promise<EnrichSpotOutcome> {
+}, options?: EnrichOptions): Promise<EnrichSpotOutcome> {
   if (!hasCoords(spot.latitude, spot.longitude)) throw new MissingCoordinatesError();
+  const minKiteableHours = await resolveKiteableDayMinHours(options);
 
   let result: EnrichmentResult;
   try {
-    result = await enrichCoordinate(spot.latitude as number, spot.longitude as number);
+    result = await enrichCoordinate(spot.latitude as number, spot.longitude as number, minKiteableHours);
   } catch (e: any) {
     // Record failure on the spot so weatherStatus can surface "Update failed".
     await storage.updateSpot(spot.id, {
@@ -145,15 +164,15 @@ export async function enrichSpot(spot: {
 }
 
 /** Convenience: enrich by numeric id. */
-export async function enrichSpotById(id: number): Promise<EnrichSpotOutcome> {
+export async function enrichSpotById(id: number, options?: EnrichOptions): Promise<EnrichSpotOutcome> {
   const spot = await storage.getSpot(id);
   if (!spot) throw new Error(`No spot with id ${id}`);
-  return enrichSpot(spot as any);
+  return enrichSpot(spot as any, options);
 }
 
 /** Convenience: enrich by slug. */
-export async function enrichSpotBySlug(slug: string): Promise<EnrichSpotOutcome> {
+export async function enrichSpotBySlug(slug: string, options?: EnrichOptions): Promise<EnrichSpotOutcome> {
   const spot = await storage.getSpotBySlug(slug);
   if (!spot) throw new Error(`No spot with slug "${slug}"`);
-  return enrichSpot(spot as any);
+  return enrichSpot(spot as any, options);
 }

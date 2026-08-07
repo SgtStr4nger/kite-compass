@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 export type RankingMode = "manual" | "auto";
 export type SeasonLabel = "peak" | "side" | "off";
 export interface ScoringConfig {
@@ -8,6 +10,7 @@ export interface ScoringConfig {
   windStrengthWeight: number;
   gustinessWeight: number;
   kiteableHoursMax: number;
+  kiteableDayMinHours: number;
   windMinKnots: number;
   windBestStartKnots: number;
   windBestEndKnots: number;
@@ -27,6 +30,7 @@ export const DEFAULT_SCORING_CONFIG: ScoringConfig = {
   windStrengthWeight: 0.2,
   gustinessWeight: 0.1,
   kiteableHoursMax: 6,
+  kiteableDayMinHours: 2,
   windMinKnots: 15,
   windBestStartKnots: 22,
   windBestEndKnots: 35,
@@ -37,6 +41,36 @@ export const DEFAULT_SCORING_CONFIG: ScoringConfig = {
   seasonPeakThreshold: 0.8,
   seasonSideThreshold: 0.5,
 };
+
+/**
+ * Validation schema for the scoring configuration submitted by the admin.
+ * - `kiteableDayMinHours` (spec §14.5) is an integer in 1..6 and must not
+ *   exceed the (submitted) `kiteableHoursMax`.
+ * - Other numeric fields keep loose finite-number checks — they were never
+ *   validated before, so we do not introduce new bounds on them.
+ */
+export const scoringConfigSchema = z.object({
+  startYear: z.number().finite(),
+  endYear: z.number().finite(),
+  kiteableDaysWeight: z.number().finite(),
+  kiteableHoursWeight: z.number().finite(),
+  windStrengthWeight: z.number().finite(),
+  gustinessWeight: z.number().finite(),
+  kiteableHoursMax: z.number().finite(),
+  kiteableDayMinHours: z.number().int().min(1).max(6),
+  windMinKnots: z.number().finite(),
+  windBestStartKnots: z.number().finite(),
+  windBestEndKnots: z.number().finite(),
+  windCutoffKnots: z.number().finite(),
+  gustMeanWeight: z.number().finite(),
+  gustGoodThresholdPct: z.number().finite(),
+  gustBadThresholdPct: z.number().finite(),
+  seasonPeakThreshold: z.number().finite(),
+  seasonSideThreshold: z.number().finite(),
+}).refine((cfg) => cfg.kiteableDayMinHours <= cfg.kiteableHoursMax, {
+  message: "kiteableDayMinHours must not exceed kiteableHoursMax",
+  path: ["kiteableDayMinHours"],
+});
 
 export interface MonthlyScoreInput {
   month?: string | null;
