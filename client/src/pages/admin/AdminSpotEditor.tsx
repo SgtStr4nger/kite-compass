@@ -308,7 +308,7 @@ export default function AdminSpotEditor() {
                 <div className="flex items-center gap-2">
                   <Input
                     value={countryNameForCode(form.country)}
-                    onChange={e => { set("country", e.target.value); set("countryManual", true); }}
+                    onChange={e => { const v = e.target.value; set("country", v); set("countryManual", v.trim().length > 0); }}
                     placeholder="Auto-detected from coordinates"
                     data-testid="input-country"
                   />

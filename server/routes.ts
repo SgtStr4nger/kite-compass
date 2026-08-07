@@ -2387,7 +2387,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // a partial PATCH must never silently clear the flag.
     const manualFlag = body.countryManual !== undefined ? !!body.countryManual : !!(stored as any).countryManual;
     body.countryManual = manualFlag;
-    const wasManual = !!(stored as any).countryManual;
+    // A manual override only counts while there's an actual non-empty country
+    // value. A spot left with an empty country (e.g. the admin cleared it) is
+    // treated as auto — so it can be re-detected instead of staying locked.
+    const wasManual = !!(stored as any).countryManual && !!stored.country;
 
     const nextLat = Number.isFinite(body.latitude) ? body.latitude : stored.latitude;
     const nextLng = Number.isFinite(body.longitude) ? body.longitude : stored.longitude;
@@ -2405,9 +2408,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     else if (!wasManual && coordsOk) {
       const bodyHasCoords = body.latitude !== undefined || body.longitude !== undefined;
       const coordsTouched = bodyHasCoords && coordsChanged(stored.latitude, stored.longitude, body.latitude, body.longitude);
-      if (coordsTouched || !stored.country) {
+      // Re-derive when coords changed, the country is missing, or the admin just
+      // cleared the field in this save.
+      const countryCleared = !stored.country || !String(body.country ?? "").trim();
+      if (coordsTouched || countryCleared) {
         const resolved = await autoResolveCountry(nextLat, nextLng);
-        if (resolved) body.country = resolved.country;
+        if (resolved) {
+          body.country = resolved.country;
+          // We just auto-derived it, so clear any stale manual flag.
+          body.countryManual = false;
+        }
       }
     }
     // 3) Manual entry (lenient): normalize a name/code to ISO-2 when possible,
