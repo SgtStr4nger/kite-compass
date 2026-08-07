@@ -52,28 +52,42 @@ Priority is **read-only** for you. You never change a `priority:*` label — it
 is set by the ticket-creator and adjusted by the planner. If you think it is
 wrong, say so in your final comment (the planner/user can correct it).
 
-## Git sync (shared checkout)
+## Git sync (work on main, PR at the end)
 
-You work directly in the shared checkout (`kite-compass`) — no worktrees, no
-per-issue directories. The checkout is shared with the planner, which always
-reads the current `main`. Keep it on `main` + clean whenever you are not
-actively editing, so the planner never sees your in-progress work.
+You work directly on local `main` — no separate working branch while
+implementing. This is deliberate: the user runs the server from THIS checkout
+(`npm run dev`), so every commit is immediately runnable with zero branch
+switching or worktrees. `origin/main` advances ONLY via merged PRs; you never
+push `main` itself.
 
 Workflow:
 1. `git fetch origin` — ALWAYS first, before reading anything.
-2. If the checkout is not already on a clean `main`, switch it:
-   `git switch main` then `git pull --ff-only origin main` (only when the
-   working tree is clean — never pull or switch over uncommitted changes).
-3. Create a fresh branch off `origin/main` (never off the local `main` or
-   another feature branch — those can be stale): `{N}` = issue number,
-   `{slug}` = short kebab-case name:
-   `git switch -c "feat/{N}-{slug}" origin/main`
-4. Implement, run `npm run check` / `npm run build`, commit, push. The
-   pipeline opens the PR from your branch.
-5. After pushing, restore the shared checkout so the planner reads current
-   main: `git switch main && git pull --ff-only origin main`.
+2. Sync local `main` with the remote: if the working tree is clean and local
+   `main` is behind `origin/main`, run `git pull --ff-only origin main`. Never
+   pull or switch over uncommitted changes. If local `main` is AHEAD of
+   `origin/main` (a previous PR is still open), leave it — do not reset or
+   rebase.
+3. Implement and commit directly on `main`. Validate as you go with
+   `npm run check` / `npm run build`; the user can boot the server from this
+   checkout at any time.
+4. When the change is done and locally confirmed, open the PR from the
+   committed state:
+   - `git fetch origin`; if `origin/main` advanced since you started, run
+     `git rebase origin/main` on local `main` first so the PR is based on the
+     latest merged code.
+   - `git switch -c "feat/{N}-{slug}"` — your commits ride along onto the new
+     branch. `{N}` = issue number, `{slug}` = short kebab-case name.
+   - `git push -u origin "feat/{N}-{slug}"`; the pipeline opens the PR from
+     this branch.
+   - `git switch main` to return the checkout to `main`. Local `main` keeps
+     your commits until the PR merges — that is expected, and the user can
+     still run the server meanwhile.
+5. Once the PR merges, sync: `git pull --ff-only origin main` (your commits
+   come back via the merge and local `main` matches `origin/main` again).
 
 Notes:
+- NEVER `git push origin main`. Your work reaches GitHub via the PR branch
+  only.
 - Run only ONE implementer at a time in this checkout. Two implementers in
   parallel would still fight over the same working tree — real parallelism
   would require the worktree setup we just removed.
@@ -84,9 +98,9 @@ Notes:
   shared and need no per-issue setup.
 
 ## Rules
-- Work on a branch created fresh from `origin/main` (see "Git sync"), then
-  commit and push. After pushing, restore the shared checkout to `main` so the
-  planner reads current main.
+- Work directly on local `main` (see "Git sync"), commit there, and validate
+  locally. When confirmed, create the PR branch from the committed state, push
+  it, and switch back to `main`. Never push `main` itself.
 - After pushing, the pipeline will open a PR; mention it in your final message
   and reference the issue number in the PR body.
 - Follow the project conventions in AGENTS.md and the existing code style.

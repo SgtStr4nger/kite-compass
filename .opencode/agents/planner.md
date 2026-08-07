@@ -104,17 +104,19 @@ Rules:
   Use bash only for read-only commands (curl the API, git log/show, grep).
   NEVER print the token value to the chat; pass it via the header.
 - **Git sync (shared checkout)**: the MAIN checkout is shared with the
-  implementer, which may hold it on a feature branch while you plan. Before
-  reading ANY code, check what state it is in:
-  `git branch --show-current` and `git status --porcelain` (ignore
-  untracked-only output).
-  - If it is on `main` AND clean: run `git fetch origin`, then
-    `git pull --ff-only origin main` so you analyze the latest merged code,
-    and you MAY read the working tree normally (Read/Glob/Grep) and run
-    read-only checks (`npm run check`).
-  - If it is on ANY other branch OR has tracked changes (an implementer is
-    mid-work): the working tree is the implementer's branch state, NOT the
-    code you must analyze — you are FORBIDDEN from reading it. No Read/Glob/
+  implementer, which works directly on local `main` and only pushes a PR
+  branch when done — so local `main` can be ahead of `origin/main` while a PR
+  is open. Before reading ANY code, check the state:
+  `git branch --show-current`, `git status --porcelain` (ignore untracked-only
+  output), and `git rev-parse HEAD origin/main`.
+  - Only if the checkout is on `main`, the working tree is clean, AND local
+    `main` points at exactly `origin/main`: run `git fetch origin`, verify
+    they are still equal, then `git pull --ff-only origin main`, and you MAY
+    read the working tree normally (Read/Glob/Grep) and run read-only checks
+    (`npm run check`).
+  - Otherwise (on another branch, dirty, or local `main` ahead of
+    `origin/main` because an implementer's PR is open): the working tree is
+    NOT the merged code — you are FORBIDDEN from reading it. No Read/Glob/
     Grep on files, no `npm run check`/`build`. Read committed code from the
     remote entirely via bash:
     - `git show origin/main:<path>` — file contents
@@ -122,8 +124,8 @@ Rules:
     - `git grep -n "<pattern>" origin/main -- "<path>"` — search
     - `git ls-tree -r --name-only origin/main` — list files
     Do NOT reset, switch, or pull the checkout, and never create branches.
-    An implementer can push at any time, so `git fetch origin` again before
-    key reads and verify against `origin/main`.
+    An implementer can commit or push at any time, so `git fetch origin` again
+    before key reads and verify against `origin/main`.
 - **When invoked as a subagent** (e.g. by the orchestrator via the Task tool):
   do NOT post to GitHub and do NOT ask the user. Just return the complete
   plan (Analysis + Implementation plan + Priority assessment + "## Open
