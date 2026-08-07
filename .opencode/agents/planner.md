@@ -103,13 +103,27 @@ Rules:
   ```
   Use bash only for read-only commands (curl the API, git log/show, grep).
   NEVER print the token value to the chat; pass it via the header.
-- **Git sync**: read the code from the MAIN checkout, which stays on `main`.
-  Before analyzing, run `git fetch origin`; if the checkout is on `main` and
-  clean, also `git pull --ff-only origin main` so you analyze the latest
-  merged code. If the checkout is on another branch or has uncommitted changes,
-  do NOT reset or switch it — read committed code directly from the remote via
-  `git show origin/main:<path>` and `git log origin/main`. Never create or
-  switch branches; you are read-only.
+- **Git sync (shared checkout)**: the MAIN checkout is shared with the
+  implementer, which may hold it on a feature branch while you plan. Before
+  reading ANY code, check what state it is in:
+  `git branch --show-current` and `git status --porcelain` (ignore
+  untracked-only output).
+  - If it is on `main` AND clean: run `git fetch origin`, then
+    `git pull --ff-only origin main` so you analyze the latest merged code,
+    and you MAY read the working tree normally (Read/Glob/Grep) and run
+    read-only checks (`npm run check`).
+  - If it is on ANY other branch OR has tracked changes (an implementer is
+    mid-work): the working tree is the implementer's branch state, NOT the
+    code you must analyze — you are FORBIDDEN from reading it. No Read/Glob/
+    Grep on files, no `npm run check`/`build`. Read committed code from the
+    remote entirely via bash:
+    - `git show origin/main:<path>` — file contents
+    - `git log origin/main` — history
+    - `git grep -n "<pattern>" origin/main -- "<path>"` — search
+    - `git ls-tree -r --name-only origin/main` — list files
+    Do NOT reset, switch, or pull the checkout, and never create branches.
+    An implementer can push at any time, so `git fetch origin` again before
+    key reads and verify against `origin/main`.
 - **When invoked as a subagent** (e.g. by the orchestrator via the Task tool):
   do NOT post to GitHub and do NOT ask the user. Just return the complete
   plan (Analysis + Implementation plan + Priority assessment + "## Open
