@@ -19,7 +19,6 @@ import {
 } from "@/lib/types";
 import { countryNameForCode, ISO2_TO_COUNTRY } from "@shared/locations";
 import { Plus, CheckCircle2, PencilLine, Circle, BadgeInfo, ChevronDown, Download, SendHorizontal, RefreshCw, ArrowRight, AlertTriangle } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useCrossPageSelection } from "@/hooks/useCrossPageSelection";
 
@@ -106,10 +105,6 @@ export default function AdminSpots() {
 
   useEffect(() => { if (!token) navigate("/admin"); }, [token, navigate]);
   useEffect(() => { setState(parseUrlState(window.location.search)); }, [location]);
-
-  const { data: usage } = useQuery<{ archiveRequests: number; marineRequests: number; failedRequests: number; totalRequests: number }>({
-    queryKey: ["/api/admin/usage/open-meteo"], enabled: !!token,
-  });
 
   const pushState = (next: SpotsTableState) => {
     const p = new URLSearchParams();
@@ -265,8 +260,8 @@ export default function AdminSpots() {
     const key = `refresh-${scope}`;
     setBusy(key);
     try {
-      const out = await api<{ updated: number; skipped: number; failed: number }>("POST", "/api/admin/data/refresh", { scope, spotIds });
-      toast({ title: `Refreshed ${out.updated} spots`, description: `${out.skipped} skipped, ${out.failed} failed` });
+      const out = await api<{ started: boolean; totalSpots: number }>("POST", "/api/admin/data/refresh", { scope, spotIds });
+      toast({ title: `Refresh started — ${out.totalSpots} spot(s)`, description: "Weather refreshes in the background; track progress in the banner or on the Settings page." });
       pushState({ ...state });
     } catch (e: any) {
       toast({ title: "Refresh failed", description: String(e.message || e), variant: "destructive" });
@@ -479,11 +474,10 @@ export default function AdminSpots() {
         emptyMessage="No spots found."
         toolbar={
           <div>
-            {usage && (
-              <div className="mb-3 rounded-xl border border-card-border bg-background p-3 text-sm text-muted-foreground">
-                Open-Meteo requests this server process: {usage.totalRequests} total, {usage.archiveRequests} archive, {usage.marineRequests} marine, {usage.failedRequests} failed.
-              </div>
-            )}
+            <div className="mb-3 flex items-center gap-1 text-sm text-muted-foreground">
+              <span>Weather refreshes run in the background and are paced by the Open-Meteo budget.</span>
+              <Link href="/admin/settings" className="text-primary no-underline hover:underline">View API usage</Link>
+            </div>
             <div className="flex flex-wrap gap-2">
               <div className="inline-flex">
                 <Button size="sm" variant="outline" onClick={() => exportRows(exportPrimaryScope)} className="rounded-r-none">
