@@ -329,6 +329,10 @@ export interface AdminDataTableProps<T> {
   onPerPageChange?: (perPage: number) => void;
   onSelect?: (id: string | number, checked: boolean) => void;
   onSelectAll?: (ids: Array<string | number>) => void;
+  /** Cross-page select-all: header checkbox checked state (true/indeterminate/false). */
+  allSelected?: boolean | "indeterminate";
+  /** Cross-page select-all toggle. `true` = select all rows matching current filters. */
+  onSelectAllToggle?: (checked: boolean) => void;
   onRowClick?: (row: T) => void;
 }
 
