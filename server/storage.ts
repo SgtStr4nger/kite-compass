@@ -12,6 +12,7 @@ import { eq, and, inArray, isNull } from "drizzle-orm";
 import crypto from "node:crypto";
 import { DEFAULT_SCORING_CONFIG, type ScoringConfig } from "@shared/scoring";
 import { COUNTRY_NAME_TO_CODE } from "@shared/locations";
+import { computeContentStatus, parseIsoMs, spotDataStatus } from "@shared/spotStatus";
 
 export const sqlite = new Database("data.db");
 sqlite.pragma("journal_mode = WAL");
@@ -649,8 +650,16 @@ export interface ListingsFilter {
   offersRental?: boolean;
   // stays only
   type?: string;
+  // spots only
+  countries?: string[];
+  contentStatus?: "published" | "published-draft" | "unpublished";
+  dataStatus?: "fresh" | "dirty" | "missing";
+  updatedFrom?: string;
+  updatedTo?: string;
+  publishedFrom?: string;
+  publishedTo?: string;
   // pagination
-  sortBy?: "name" | "updatedAt";
+  sortBy?: "name" | "updatedAt" | "lastPublishedAt";
   sortDir?: "asc" | "desc";
   page?: number;
   perPage?: number;
@@ -814,6 +823,7 @@ export interface IStorage {
   deleteUser(id: number): Promise<void>;
   // spots
   listSpots(publishedOnly: boolean): Promise<Spot[]>;
+  listAllSpots(filter: ListingsFilter): Promise<ListingsPage<Spot & { monthlyCount: number }>>;
   getSpot(id: number): Promise<Spot | undefined>;
   getSpotBySlug(slug: string): Promise<Spot | undefined>;
   createSpot(s: InsertSpot): Promise<Spot>;
@@ -961,6 +971,60 @@ export class DatabaseStorage implements IStorage {
     const all = db.select().from(spots).where(isNull(spots.deletedAt)).all();
     return publishedOnly ? all.filter(s => s.published) : all;
   }
+
+  async listAllSpots(filter: ListingsFilter): Promise<ListingsPage<Spot & { monthlyCount: number }>> {
+    let all = db.select().from(spots).where(isNull(spots.deletedAt)).all();
+
+    // monthly counts via one grouped pass over all monthly rows
+    const monthly = db.select().from(monthlyRecords).all();
+    const countById: Record<number, number> = {};
+    for (const m of monthly) countById[m.spotId] = (countById[m.spotId] || 0) + 1;
+
+    if (filter.search) {
+      const q = filter.search.toLowerCase();
+      all = all.filter(s => s.name.toLowerCase().includes(q));
+    }
+    if (filter.countries?.length) {
+      const set = new Set(filter.countries);
+      all = all.filter(s => set.has(s.country ?? ""));
+    }
+    if (filter.published !== undefined) all = all.filter(s => !!s.published === filter.published);
+    if (filter.contentStatus) all = all.filter(s => computeContentStatus(s) === filter.contentStatus);
+    if (filter.dataStatus) all = all.filter(s => spotDataStatus(s) === filter.dataStatus);
+    if (filter.updatedFrom) {
+      const from = parseIsoMs(filter.updatedFrom);
+      if (from != null) all = all.filter(s => (parseIsoMs(s.updatedAt) ?? 0) >= from);
+    }
+    if (filter.updatedTo) {
+      const to = parseIsoMs(filter.updatedTo);
+      if (to != null) all = all.filter(s => (parseIsoMs(s.updatedAt) ?? 0) <= to);
+    }
+    if (filter.publishedFrom) {
+      const from = parseIsoMs(filter.publishedFrom);
+      if (from != null) all = all.filter(s => (parseIsoMs(s.publishedAt) ?? 0) >= from);
+    }
+    if (filter.publishedTo) {
+      const to = parseIsoMs(filter.publishedTo);
+      if (to != null) all = all.filter(s => (parseIsoMs(s.publishedAt) ?? 0) <= to);
+    }
+
+    const sortBy = filter.sortBy || "updatedAt";
+    const sortDir = filter.sortDir || "desc";
+    all.sort((a, b) => {
+      let cmp = 0;
+      if (sortBy === "name") cmp = a.name.localeCompare(b.name);
+      else if (sortBy === "lastPublishedAt") cmp = (a.publishedAt || "").localeCompare(b.publishedAt || "");
+      else cmp = (a.updatedAt || "").localeCompare(b.updatedAt || "");
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+
+    const total = all.length;
+    const perPage = filter.perPage || 50;
+    const page = filter.page || 1;
+    const start = (page - 1) * perPage;
+    const items = all.slice(start, start + perPage).map(s => ({ ...s, monthlyCount: countById[s.id] || 0 }));
+    return { items, total, page, perPage };
+  }
   async getSpot(id: number) {
     return db.select().from(spots).where(and(eq(spots.id, id), isNull(spots.deletedAt))).get();
   }
@@ -1086,6 +1150,14 @@ export class DatabaseStorage implements IStorage {
         return filter.sports!.some(x => sp.includes(x));
       });
     }
+    if (filter.updatedFrom) {
+      const from = parseIsoMs(filter.updatedFrom);
+      if (from != null) all = all.filter(s => (parseIsoMs(s.updatedAt) ?? 0) >= from);
+    }
+    if (filter.updatedTo) {
+      const to = parseIsoMs(filter.updatedTo);
+      if (to != null) all = all.filter(s => (parseIsoMs(s.updatedAt) ?? 0) <= to);
+    }
 
     const sortBy = filter.sortBy || "updatedAt";
     const sortDir = filter.sortDir || "desc";
@@ -1177,6 +1249,14 @@ export class DatabaseStorage implements IStorage {
     if (filter.missingWebsite) all = all.filter(s => !s.websiteUrl);
     if (filter.missingMap) all = all.filter(s => !s.mapUrl);
     if (filter.type) all = all.filter(s => s.type === filter.type);
+    if (filter.updatedFrom) {
+      const from = parseIsoMs(filter.updatedFrom);
+      if (from != null) all = all.filter(s => (parseIsoMs(s.updatedAt) ?? 0) >= from);
+    }
+    if (filter.updatedTo) {
+      const to = parseIsoMs(filter.updatedTo);
+      if (to != null) all = all.filter(s => (parseIsoMs(s.updatedAt) ?? 0) <= to);
+    }
 
     const sortBy = filter.sortBy || "updatedAt";
     const sortDir = filter.sortDir || "desc";

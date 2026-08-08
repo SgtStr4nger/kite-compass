@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+
 export interface MonthlyRecord {
   id: number;
   spotId: number;
@@ -266,6 +268,68 @@ export interface ListingsPage<T> {
   total: number;
   page: number;
   perPage: number;
+}
+
+// ── Generic AdminDataTable types (shared by Spots / Kite Schools / Stays) ──
+
+export type ColumnFilterType = "text" | "select" | "boolean" | "multiselect" | "dateRange";
+
+export interface AdminFilterOption {
+  value: string;
+  label: string;
+}
+
+/** Value stored for a single column's filter inside `AdminTableFilters`. */
+export type ColumnFilterValue =
+  | string
+  | boolean
+  | string[]
+  | { from?: string; to?: string }
+  | undefined;
+
+/** Filter state keyed by column `key`. */
+export interface AdminTableFilters {
+  [key: string]: ColumnFilterValue;
+}
+
+export interface AdminTableColumn<T> {
+  /** Stable identifier; also the key used in `AdminTableFilters`. */
+  key: string;
+  header: string;
+  sortable?: boolean;
+  filterable?: boolean;
+  filterType?: ColumnFilterType;
+  /** Options for `select` / `boolean` / `multiselect` filters. */
+  filterOptions?: AdminFilterOption[];
+  width?: string;
+  className?: string;
+  headerClassName?: string;
+  renderCell: (row: T) => ReactNode;
+}
+
+export interface AdminDataTableProps<T> {
+  columns: AdminTableColumn<T>[];
+  rows: T[];
+  keyField?: keyof T;
+  total: number;
+  page: number;
+  perPage: number;
+  sortBy?: string;
+  sortDir?: "asc" | "desc";
+  filters?: AdminTableFilters;
+  selectedIds?: Array<string | number>;
+  loading?: boolean;
+  emptyMessage?: string;
+  perPageOptions?: number[];
+  /** Rendered above the table (bulk actions, import/export, etc.). */
+  toolbar?: ReactNode;
+  onSortChange?: (key: string) => void;
+  onFilterChange?: (key: string, value: ColumnFilterValue) => void;
+  onPageChange?: (page: number) => void;
+  onPerPageChange?: (perPage: number) => void;
+  onSelect?: (id: string | number, checked: boolean) => void;
+  onSelectAll?: (ids: Array<string | number>) => void;
+  onRowClick?: (row: T) => void;
 }
 
 export type ExcelCategory = "spots" | "schools" | "stays";

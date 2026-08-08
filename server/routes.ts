@@ -13,6 +13,7 @@ import { getContinentForCountry, countryNameForCode, normalizeCountryCode } from
 import { bestEvaluableScore, calculateAutoMonthlyScore, DEFAULT_SCORING_CONFIG, deriveSeasonLabelFromScore, resolveMonthlyScore, scoringConfigSchema, type ScoringConfig } from "@shared/scoring";
 import { insertSpotSchema, insertMonthlySchema, monthlyRecords, schools, spots, stays, spotSchools, spotStays } from "@shared/schema";
 import type { Spot, MonthlyRecord, InsertMonthly, InsertSchool, InsertStay } from "@shared/schema";
+import { computeContentStatus, parseIsoMs, spotDataStatus, type DataStatus } from "@shared/spotStatus";
 
 // Fixed Jan→Dec order for compact season strips (server-side; mirrors client MONTHS).
 const MONTH_ORDER = [
@@ -20,10 +21,6 @@ const MONTH_ORDER = [
   "July", "August", "September", "October", "November", "December",
 ] as const;
 
-type DataStatus = "fresh" | "dirty" | "missing";
-
-// Spec §20.1 content status
-type ContentStatus = "unpublished" | "published" | "published-draft";
 // Spec §20.2 weather status
 type WeatherStatus = "Missing" | "Up to date" | "Up to date · Manual changes" | "Outdated" | "Update failed";
 
@@ -907,27 +904,6 @@ function publishCountryError(spot: { country?: string | null }): string | null {
   return null;
 }
 
-function parseIsoMs(value: string | null | undefined): number | null {
-  if (!value) return null;
-  const ms = new Date(value).getTime();
-  return Number.isFinite(ms) ? ms : null;
-}
-
-function spotDataStatus(spot: { dataLastRefreshedAt?: string | null; updatedAt?: string | null }): DataStatus {
-  if (!spot.dataLastRefreshedAt) return "missing";
-  const refreshedAt = parseIsoMs(spot.dataLastRefreshedAt);
-  const updatedAt = parseIsoMs(spot.updatedAt);
-  if (refreshedAt == null) return "missing";
-  if (updatedAt != null && updatedAt > refreshedAt) return "dirty";
-  return "fresh";
-}
-
-function computeContentStatus(spot: { published?: boolean | null; hasDraft?: boolean | null }): ContentStatus {
-  if (!spot.published) return "unpublished";
-  if (spot.hasDraft) return "published-draft";
-  return "published";
-}
-
 function computeWeatherStatus(spot: {
   dataLastRefreshedAt?: string | null;
   weatherLastError?: string | null;
@@ -1720,11 +1696,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (category === "spots") {
       if (!SPOTS_JSON_SCOPES.has(scope)) return res.status(400).json({ error: "invalid scope" });
       const spotScope = scope as SpotJsonScope;
-      let list = (await storage.listSpots(false)).map(s => serializeSpot(s, true));
-      if (filters.q) {
-        const q = filters.q.toLowerCase();
-        list = list.filter(s => s.name.toLowerCase().includes(q) || (s.country || "").toLowerCase().includes(q) || countryNameForCode(s.country).toLowerCase().includes(q));
-      }
+      const spotFilter: ListingsFilter = {
+        search: filters.search || filters.q,
+        published: filters.published,
+        countries: filters.countries,
+        contentStatus: filters.contentStatus,
+        dataStatus: filters.dataStatus,
+        updatedFrom: filters.updatedFrom,
+        updatedTo: filters.updatedTo,
+        publishedFrom: filters.publishedFrom,
+        publishedTo: filters.publishedTo,
+        sortBy: filters.sortBy,
+        sortDir: filters.sortDir,
+      };
+      let list = (await storage.listAllSpots({ ...spotFilter, page: 1, perPage: EXCEL_MAX_ROWS })).items.map(s => serializeSpot(s, true));
       if (spotScope === "selected") list = list.filter(s => selectedIds.includes(s.id));
       const items = list.map((s) => ({
         match: {
@@ -2354,6 +2339,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(spots.map(s => ({ ...s, monthlyCount: byId[s.id] || 0 })));
   });
 
+  // Server-side paginated/filtered spot listing (used by the unified Spots admin table).
+  app.get("/api/admin/listings/spots", requireAuth, async (req, res) => {
+    const q = req.query;
+    const filter: ListingsFilter = {
+      search: (q.search as string) || undefined,
+      published: q.published !== undefined ? q.published === "true" : undefined,
+      countries: q.countries ? ([] as string[]).concat(q.countries as any) : undefined,
+      contentStatus: (q.contentStatus as any) || undefined,
+      dataStatus: (q.dataStatus as any) || undefined,
+      updatedFrom: (q.updatedFrom as string) || undefined,
+      updatedTo: (q.updatedTo as string) || undefined,
+      publishedFrom: (q.publishedFrom as string) || undefined,
+      publishedTo: (q.publishedTo as string) || undefined,
+      sortBy: (q.sortBy as any) || "updatedAt",
+      sortDir: (q.sortDir as any) || "desc",
+      page: q.page ? Number(q.page) : 1,
+      perPage: q.perPage ? Number(q.perPage) : 50,
+    };
+    const result = await storage.listAllSpots(filter);
+    res.json({ ...result, items: result.items.map(s => serializeSpot(s, true)) });
+  });
+
   app.get("/api/admin/spots/:id", requireAuth, async (req, res) => {
     const spot = await storage.getSpot(Number(req.params.id));
     if (!spot) return res.status(404).json({ error: "not found" });
@@ -2789,6 +2796,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       offersLessons: q.offersLessons !== undefined ? q.offersLessons === "true" : undefined,
       offersRental: q.offersRental !== undefined ? q.offersRental === "true" : undefined,
       sports: q.sports ? ([] as string[]).concat(q.sports as any) : undefined,
+      updatedFrom: (q.updatedFrom as string) || undefined,
+      updatedTo: (q.updatedTo as string) || undefined,
       sortBy: (q.sortBy as any) || "updatedAt",
       sortDir: (q.sortDir as any) || "desc",
       page: q.page ? Number(q.page) : 1,
@@ -2833,6 +2842,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       missingWebsite: q.missingWebsite === "true" ? true : undefined,
       missingMap: q.missingMap === "true" ? true : undefined,
       type: (q.type as string) || undefined,
+      updatedFrom: (q.updatedFrom as string) || undefined,
+      updatedTo: (q.updatedTo as string) || undefined,
       sortBy: (q.sortBy as any) || "updatedAt",
       sortDir: (q.sortDir as any) || "desc",
       page: q.page ? Number(q.page) : 1,
