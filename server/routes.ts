@@ -8,7 +8,7 @@ import { db, storage, sqlite, logError } from "./storage";
 import { log } from "./log";
 import type { ListingsFilter, SeoContent, TrashCategory, RedirectRow, AdminErrorStatus, AiSettingsContent } from "./storage";
 import { enrichSpotById, MissingCoordinatesError } from "./services/enrichment";
-import { AiNotConfiguredError, AiProviderError, AI_FILLABLE_FIELDS, enrichOneSpot, isFieldEmpty } from "./services/aiContent";
+import { AiNotConfiguredError, AiProviderError, AI_FILLABLE_FIELDS, DEFAULT_AI_PROMPTS, enrichOneSpot, isFieldEmpty } from "./services/aiContent";
 import { getWaitState, setBudgetWaitListener } from "./services/openMeteoBudget";
 import { reverseGeocodeCountry } from "./services/reverseGeocode";
 import { getContinentForCountry, countryNameForCode, normalizeCountryCode } from "@shared/locations";
@@ -2900,12 +2900,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ── AI content enrichment (spec #74) ──
   // Settings key is masked server-side so the raw key never reaches the client
-  // or the request/response log.
+  // or the request/response log. Per-field prompts are merged with the defaults
+  // so the client always sees the effective instructions.
   const maskAiSettings = (s: AiSettingsContent) => ({
     apiKeySet: !!s.apiKey,
     apiKeyHint: s.apiKey && s.apiKey.length >= 4 ? s.apiKey.slice(-4) : null,
     model: s.model,
     baseUrl: s.baseUrl,
+    prompts: { ...DEFAULT_AI_PROMPTS, ...(s.prompts || {}) },
     updatedAt: s.updatedAt,
   });
 
@@ -2916,7 +2918,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.patch("/api/admin/ai/settings", requireAuth, requireMainAdmin, async (req, res) => {
     const body = req.body || {};
-    const patch: { apiKey?: string; model?: string; baseUrl?: string } = {};
+    const patch: { apiKey?: string; model?: string; baseUrl?: string; prompts?: Record<string, string> } = {};
     if (body.apiKey !== undefined) {
       if (typeof body.apiKey !== "string") return res.status(400).json({ error: "apiKey must be a string" });
       patch.apiKey = body.apiKey; // keep semantics handled by storage (omitted keeps; "" clears)
@@ -2931,8 +2933,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!baseUrl) return res.status(400).json({ error: "baseUrl must be a non-empty string" });
       patch.baseUrl = baseUrl;
     }
+    if (body.prompts !== undefined) {
+      if (!body.prompts || typeof body.prompts !== "object" || Array.isArray(body.prompts)) {
+        return res.status(400).json({ error: "prompts must be an object" });
+      }
+      const clean: Record<string, string> = {};
+      for (const key of AI_FILLABLE_FIELDS) {
+        const v = body.prompts[key];
+        clean[key] = typeof v === "string" ? v.trim() : DEFAULT_AI_PROMPTS[key];
+      }
+      patch.prompts = clean;
+    }
     const s = await storage.saveAiSettings(patch);
     res.json(maskAiSettings(s));
+  });
+
+  app.get("/api/admin/ai/history", requireAuth, async (req, res) => {
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
+    res.json(await storage.listAiEnrichLog(limit));
   });
 
   app.post("/api/admin/ai/enrich", requireAuth, async (req, res) => {

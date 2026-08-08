@@ -120,6 +120,8 @@ export function AdminLayout({ children }: { children: ReactNode }) {
     if (!token) return;
     let alive = true;
     let timerId: number | null = null;
+    // Used to fire the "job finished → refresh spots" event exactly once per run.
+    let wasActive = false;
 
     const scheduleNext = (intervalMs: number) => {
       if (!alive) return;
@@ -131,16 +133,34 @@ export function AdminLayout({ children }: { children: ReactNode }) {
         const status = await api<AiEnrichStatus>("GET", "/api/admin/ai/enrich/status");
         if (!alive) return;
         setAiStatus(status);
-        if (status.active) scheduleNext(2000);
-        else if (!status.visible) scheduleNext(30_000);
-        else scheduleNext(5000);
+        if (status.active) {
+          wasActive = true;
+          scheduleNext(2000);
+        } else {
+          // Detect the active→terminal transition so the Spots table can refetch
+          // and show freshly-written AI drafts without a manual page refresh.
+          if (wasActive && (status.status === "AI enrichment completed" || status.status === "AI enrichment failed")) {
+            wasActive = false;
+            window.dispatchEvent(new CustomEvent("ai-enrich-done"));
+          }
+          if (!status.visible) scheduleNext(30_000);
+          else scheduleNext(5000);
+        }
       } catch {
         if (alive) scheduleNext(15_000);
       }
     };
 
+    // Let the Spots page trigger an immediate poll right after starting a run.
+    const onRefresh = () => { if (!alive) return; if (timerId !== null) window.clearTimeout(timerId); void poll(); };
+    window.addEventListener("ai-enrich-refresh", onRefresh);
+
     void poll();
-    return () => { alive = false; if (timerId !== null) window.clearTimeout(timerId); };
+    return () => {
+      alive = false;
+      if (timerId !== null) window.clearTimeout(timerId);
+      window.removeEventListener("ai-enrich-refresh", onRefresh);
+    };
   }, [token]);
 
   // Poll open error count for nav badge
@@ -378,7 +398,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
           </div>
         )}
         {aiStatus?.visible && (
-          <div className={`border-b px-5 py-3 text-sm md:px-8 ${aiStatus.active ? "border-amber-300 bg-amber-50 text-amber-900" : "border-rose-300 bg-rose-50 text-rose-900"}`}>
+          <div className={`border-b px-5 py-3 text-sm md:px-8 ${aiStatus.active ? "border-amber-300 bg-amber-50 text-amber-900" : aiStatus.status === "AI enrichment failed" ? "border-rose-300 bg-rose-50 text-rose-900" : "border-emerald-300 bg-emerald-50 text-emerald-900"}`}>
             <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <span className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold ${aiStatus.active ? "bg-amber-100 text-amber-900" : aiStatus.status === "AI enrichment failed" ? "bg-rose-100 text-rose-900" : "bg-emerald-100 text-emerald-900"}`}>

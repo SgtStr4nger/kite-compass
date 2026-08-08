@@ -1,4 +1,4 @@
-import { users, spots, monthlyRecords, filterDefs, schools, stays, sitePages, legalPages, seoSettings, scoringSettings, scoringRecalcState, weatherRefreshState, aiSettings, aiEnrichState, spotSchools, spotStays } from '@shared/schema';
+import { users, spots, monthlyRecords, filterDefs, schools, stays, sitePages, legalPages, seoSettings, scoringSettings, scoringRecalcState, weatherRefreshState, aiSettings, aiEnrichState, aiEnrichLog, spotSchools, spotStays } from '@shared/schema';
 import type {
   User, InsertUser, Spot, InsertSpot, MonthlyRecord, InsertMonthly,
   School, InsertSchool, Stay, InsertStay,
@@ -286,6 +286,7 @@ sqlite.exec(`
     api_key TEXT NOT NULL DEFAULT '',
     model TEXT NOT NULL DEFAULT 'deepseek-v4-flash',
     base_url TEXT NOT NULL DEFAULT 'https://api.deepseek.com',
+    prompts_json TEXT NOT NULL DEFAULT '{}',
     updated_at TEXT
   );
   CREATE TABLE IF NOT EXISTS ai_enrich_state (
@@ -297,6 +298,16 @@ sqlite.exec(`
     dismissible INTEGER NOT NULL DEFAULT 0,
     dismissed INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS ai_enrich_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    spot_id INTEGER,
+    spot_name TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'success',
+    written_fields TEXT,
+    skipped_fields TEXT,
+    error TEXT,
+    created_at TEXT
   );
   CREATE TABLE IF NOT EXISTS redirects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -399,6 +410,9 @@ ensureColumns("seo_settings", [
   { name: "methodology_description_published", ddl: "methodology_description_published TEXT NOT NULL DEFAULT ''" },
   { name: "has_draft", ddl: "has_draft INTEGER DEFAULT 1" },
   { name: "published_at", ddl: "published_at TEXT" },
+]);
+ensureColumns("ai_settings", [
+  { name: "prompts_json", ddl: "prompts_json TEXT NOT NULL DEFAULT '{}'" },
 ]);
 
 const defaultImpressumBody = [
@@ -783,7 +797,20 @@ export interface AiSettingsContent {
   apiKey: string;
   model: string;
   baseUrl: string;
+  /** Custom per-field prompt overrides (JSON object keyed by fillable field name). */
+  prompts: Record<string, string>;
   updatedAt: string | null;
+}
+
+export interface AiEnrichLogEntry {
+  id: number;
+  spotId: number | null;
+  spotName: string;
+  status: "success" | "failed" | "skipped";
+  writtenFields: string[];
+  skippedFields: string[];
+  error: string | null;
+  createdAt: string | null;
 }
 
 export interface AiEnrichStatus {
@@ -958,10 +985,12 @@ export interface IStorage {
   dismissWeatherRefreshStatus(): Promise<WeatherRefreshStatus>;
   // AI enrichment settings + job state (spec #74)
   getAiSettings(): Promise<AiSettingsContent>;
-  saveAiSettings(patch: { apiKey?: string; model?: string; baseUrl?: string }): Promise<AiSettingsContent>;
+  saveAiSettings(patch: { apiKey?: string; model?: string; baseUrl?: string; prompts?: Record<string, string> }): Promise<AiSettingsContent>;
   getAiEnrichStatus(): Promise<AiEnrichStatus>;
   setAiEnrichStatus(next: Partial<Omit<AiEnrichStatus, "active" | "visible">> & { status: AiEnrichStatus["status"] }): Promise<AiEnrichStatus>;
   dismissAiEnrichStatus(): Promise<AiEnrichStatus>;
+  logAiEnrichCall(entry: { spotId?: number | null; spotName?: string; status: "success" | "failed" | "skipped"; writtenFields?: string[]; skippedFields?: string[]; error?: string | null }): Promise<AiEnrichLogEntry>;
+  listAiEnrichLog(limit?: number): Promise<AiEnrichLogEntry[]>;
   // trash (soft delete)
   listTrash(): Promise<TrashItem[]>;
   getRestoreInfo(category: TrashCategory, id: number): Promise<RestoreInfo | undefined>;
@@ -1662,15 +1691,21 @@ export class DatabaseStorage implements IStorage {
   async getAiSettings(): Promise<AiSettingsContent> {
     const row = db.select().from(aiSettings).get();
     if (!row) throw new Error("ai settings not initialized");
+    let prompts: Record<string, string> = {};
+    try {
+      const parsed = JSON.parse(row.promptsJson ?? "{}");
+      if (parsed && typeof parsed === "object") prompts = parsed;
+    } catch { prompts = {}; }
     return {
       apiKey: row.apiKey ?? "",
       model: row.model ?? "deepseek-v4-flash",
       baseUrl: row.baseUrl ?? "https://api.deepseek.com",
+      prompts,
       updatedAt: row.updatedAt ?? null,
     };
   }
 
-  async saveAiSettings(patch: { apiKey?: string; model?: string; baseUrl?: string }): Promise<AiSettingsContent> {
+  async saveAiSettings(patch: { apiKey?: string; model?: string; baseUrl?: string; prompts?: Record<string, string> }): Promise<AiSettingsContent> {
     const row = db.select().from(aiSettings).get();
     if (!row) throw new Error("ai settings not initialized");
     const updated = db.update(aiSettings).set({
@@ -1678,12 +1713,19 @@ export class DatabaseStorage implements IStorage {
       apiKey: patch.apiKey !== undefined ? patch.apiKey : row.apiKey ?? "",
       model: patch.model !== undefined ? patch.model : row.model ?? "deepseek-v4-flash",
       baseUrl: patch.baseUrl !== undefined ? patch.baseUrl : row.baseUrl ?? "https://api.deepseek.com",
+      promptsJson: patch.prompts !== undefined ? JSON.stringify(patch.prompts) : (row.promptsJson ?? "{}"),
       updatedAt: now(),
     } as any).where(eq(aiSettings.id, row.id)).returning().get();
+    let prompts: Record<string, string> = {};
+    try {
+      const parsed = JSON.parse(updated.promptsJson ?? "{}");
+      if (parsed && typeof parsed === "object") prompts = parsed;
+    } catch { prompts = {}; }
     return {
       apiKey: updated.apiKey ?? "",
       model: updated.model ?? "deepseek-v4-flash",
       baseUrl: updated.baseUrl ?? "https://api.deepseek.com",
+      prompts,
       updatedAt: updated.updatedAt ?? null,
     };
   }
@@ -1728,6 +1770,47 @@ export class DatabaseStorage implements IStorage {
     if (!row) throw new Error("ai enrich state not initialized");
     db.update(aiEnrichState).set({ dismissed: true, updatedAt: now() } as any).where(eq(aiEnrichState.id, row.id)).run();
     return this.getAiEnrichStatus();
+  }
+
+  async logAiEnrichCall(entry: { spotId?: number | null; spotName?: string; status: "success" | "failed" | "skipped"; writtenFields?: string[]; skippedFields?: string[]; error?: string | null }): Promise<AiEnrichLogEntry> {
+    const result = sqlite.prepare(
+      `INSERT INTO ai_enrich_log (spot_id, spot_name, status, written_fields, skipped_fields, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      entry.spotId ?? null,
+      entry.spotName ?? "",
+      entry.status,
+      JSON.stringify(entry.writtenFields ?? []),
+      JSON.stringify(entry.skippedFields ?? []),
+      entry.error ?? null,
+      now(),
+    );
+    return this._aiEnrichLogFromRow(
+      sqlite.prepare(`SELECT id, spot_id, spot_name, status, written_fields, skipped_fields, error, created_at FROM ai_enrich_log WHERE id = ?`)
+        .get(Number(result.lastInsertRowid)) as any,
+    );
+  }
+
+  private _aiEnrichLogFromRow(r: any): AiEnrichLogEntry {
+    const parse = (v: any): string[] => {
+      try { const a = JSON.parse(v ?? "[]"); return Array.isArray(a) ? a : []; } catch { return []; }
+    };
+    return {
+      id: r.id,
+      spotId: r.spot_id ?? null,
+      spotName: r.spot_name ?? "",
+      status: r.status as AiEnrichLogEntry["status"],
+      writtenFields: parse(r.written_fields),
+      skippedFields: parse(r.skipped_fields),
+      error: r.error ?? null,
+      createdAt: r.created_at ?? null,
+    };
+  }
+
+  async listAiEnrichLog(limit = 50): Promise<AiEnrichLogEntry[]> {
+    const rows = sqlite.prepare(
+      `SELECT id, spot_id, spot_name, status, written_fields, skipped_fields, error, created_at FROM ai_enrich_log ORDER BY id DESC LIMIT ?`
+    ).all(limit) as any[];
+    return rows.map(r => this._aiEnrichLogFromRow(r));
   }
 
   async listTrash(): Promise<TrashItem[]> {

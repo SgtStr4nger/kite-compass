@@ -318,9 +318,24 @@ export const aiSettings = sqliteTable("ai_settings", {
   apiKey: text("api_key").notNull().default(""),
   model: text("model").notNull().default("deepseek-v4-flash"),
   baseUrl: text("base_url").notNull().default("https://api.deepseek.com"),
+  // JSON object: per-field custom prompt instructions, keyed by fillable field name.
+  promptsJson: text("prompts_json").notNull().default("{}"),
   updatedAt: text("updated_at"),
 });
 export type AiSettingsRow = typeof aiSettings.$inferSelect;
+
+/* Per-call AI enrichment log (spec #74 follow-up: history in AI settings). */
+export const aiEnrichLog = sqliteTable("ai_enrich_log", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  spotId: integer("spot_id"),
+  spotName: text("spot_name").notNull().default(""),
+  status: text("status").notNull().default("success"), // success | failed | skipped
+  writtenFields: text("written_fields"),               // JSON array
+  skippedFields: text("skipped_fields"),               // JSON array
+  error: text("error"),
+  createdAt: text("created_at"),
+});
+export type AiEnrichLogRow = typeof aiEnrichLog.$inferSelect;
 
 /* Background AI enrichment job state (mirror of weather_refresh_state). */
 export const aiEnrichState = sqliteTable("ai_enrich_state", {

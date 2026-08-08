@@ -58,6 +58,20 @@ export const aiSpotContentSchema = z.object({
 });
 export type AiSpotContent = z.infer<typeof aiSpotContentSchema>;
 
+/** Default per-field prompt instructions, used when no override is saved in ai_settings. */
+export const DEFAULT_AI_PROMPTS: Record<string, string> = {
+  destinationSummary: "destinationSummary: 1-2 sentences capturing the spot's essence and kite appeal.",
+  destinationDescription: "destinationDescription: 3-5 sentences describing the destination, its character and why kitesurfers go there.",
+  kiteContextDescription: "kiteContextDescription: describe the wind, water and riding conditions for kitesurfers.",
+  teaserText: "teaserText: a short 1-2 sentence teaser to hook readers.",
+  transportNote: "transportNote: practical travel/transport tips for reaching the spot.",
+  spotTypes: "spotTypes: choose only from the allowed enum values.",
+  riderLevels: "riderLevels: choose only from the allowed enum values.",
+  vibeTags: "vibeTags: choose only from the allowed enum values.",
+};
+
+/** The 8 target keys the AI may write (all optional spot columns). */
+
 export class AiNotConfiguredError extends Error {}
 export class AiProviderError extends Error {
   status: number;
@@ -136,11 +150,14 @@ export async function generateSpotContent(spot: Spot): Promise<AiSpotContent> {
   };
   const current = currentFillableValues(spot);
 
+  // Per-field instructions: saved override wins, otherwise the default.
+  const fieldPrompts = AI_FILLABLE_FIELDS.map((key) => settings.prompts?.[key]?.trim() || DEFAULT_AI_PROMPTS[key]);
+
   const system = [
     "You are a professional kitesurf travel writer for Kite Compass, a destination ranking website.",
     "Write concise, factual, kite-travel-oriented copy in English based only on the spot facts provided.",
     "Never invent factual claims about wind, weather, or geography beyond what is given.",
-    "destinationDescription should be 3-5 sentences; destinationSummary and teaserText should each be 1-2 sentences.",
+    ...fieldPrompts,
     "spotTypes, riderLevels and vibeTags must use ONLY the exact enum values listed. Return them as JSON arrays.",
     "Respond with ONLY a single JSON object (no markdown, no commentary) containing all 8 keys.",
   ].join("\n");
@@ -222,7 +239,7 @@ export async function generateSpotContent(spot: Spot): Promise<AiSpotContent> {
  * Enrich one spot: call the AI, then server-side merge — write a field only if it
  * was empty (and validates for enum keys). Persists via updateSpot (draft only).
  * Returns which fields were written/skipped. Does NOT call the API when no field
- * is empty.
+ * is empty. Each call is recorded in the AI enrichment log.
  */
 export async function enrichOneSpot(spot: Spot): Promise<{ writtenFields: string[]; skippedFields: string[] }> {
   const writtenFields: string[] = [];
@@ -232,27 +249,55 @@ export async function enrichOneSpot(spot: Spot): Promise<{ writtenFields: string
     if (isFieldEmpty(spot, key)) writtenFields.push(key);
     else skippedFields.push(key);
   }
-  // Nothing to fill → skip the API call entirely.
-  if (!writtenFields.length) return { writtenFields: [], skippedFields };
-
-  const content = await generateSpotContent(spot);
-
-  const patch: Record<string, unknown> = {};
-  for (const key of AI_FILLABLE_FIELDS) {
-    if (!isFieldEmpty(spot, key)) continue; // never overwrite
-    const value = (content as any)[key];
-    if (value === undefined) {
-      skippedFields.push(key);
-      continue;
-    }
-    if (key === "spotTypes" || key === "riderLevels" || key === "vibeTags") {
-      patch[key] = JSON.stringify(value);
-    } else {
-      patch[key] = String(value).trim();
-    }
-    writtenFields.push(key);
+  // Nothing to fill → no API call; still record as a skipped entry.
+  if (!writtenFields.length) {
+    await storage.logAiEnrichCall({
+      spotId: spot.id,
+      spotName: spot.name,
+      status: "skipped",
+      writtenFields,
+      skippedFields,
+    });
+    return { writtenFields: [], skippedFields };
   }
 
-  await storage.updateSpot(spot.id, patch as any);
-  return { writtenFields, skippedFields };
+  try {
+    const content = await generateSpotContent(spot);
+
+    const patch: Record<string, unknown> = {};
+    for (const key of AI_FILLABLE_FIELDS) {
+      if (!isFieldEmpty(spot, key)) continue; // never overwrite
+      const value = (content as any)[key];
+      if (value === undefined) {
+        skippedFields.push(key);
+        continue;
+      }
+      if (key === "spotTypes" || key === "riderLevels" || key === "vibeTags") {
+        patch[key] = JSON.stringify(value);
+      } else {
+        patch[key] = String(value).trim();
+      }
+      writtenFields.push(key);
+    }
+
+    await storage.updateSpot(spot.id, patch as any);
+    await storage.logAiEnrichCall({
+      spotId: spot.id,
+      spotName: spot.name,
+      status: "success",
+      writtenFields,
+      skippedFields,
+    });
+    return { writtenFields, skippedFields };
+  } catch (e: any) {
+    await storage.logAiEnrichCall({
+      spotId: spot.id,
+      spotName: spot.name,
+      status: "failed",
+      writtenFields: [],
+      skippedFields,
+      error: String(e?.message ?? e),
+    });
+    throw e;
+  }
 }

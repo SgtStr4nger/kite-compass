@@ -160,6 +160,15 @@ export default function AdminSpots() {
       .finally(() => setLoading(false));
   }, [state, token, toast]);
 
+  // Refetch when an AI enrichment job completes so freshly-written drafts appear
+  // without a manual page refresh.
+  useEffect(() => {
+    if (!token) return;
+    const onDone = () => { pushState({ ...state }); };
+    window.addEventListener("ai-enrich-done", onDone);
+    return () => window.removeEventListener("ai-enrich-done", onDone);
+  }, [token, state]);
+
   const loadHistory = async () => setHistory(await api<ExcelImportHistoryItem[]>("GET", "/api/admin/excel/import/spots/history"));
   useEffect(() => { if (token) void loadHistory(); }, [token]);
   useEffect(() => {
@@ -281,6 +290,8 @@ export default function AdminSpots() {
           title: "AI enrichment started",
           description: `${out.spots} spot(s) queued (${out.skipped} already complete)`,
         });
+        // Trigger the admin layout to poll the status immediately so the banner appears right away.
+        window.dispatchEvent(new CustomEvent("ai-enrich-refresh"));
       } else {
         toast({ title: "AI enrichment", description: out.error || "No eligible spots." });
       }

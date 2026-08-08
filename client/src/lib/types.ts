@@ -179,7 +179,19 @@ export interface AiSettings {
   apiKeyHint: string | null;
   model: string;
   baseUrl: string;
+  prompts: Record<string, string>;
   updatedAt: string | null;
+}
+
+export interface AiEnrichLogEntry {
+  id: number;
+  spotId: number | null;
+  spotName: string;
+  status: "success" | "failed" | "skipped";
+  writtenFields: string[];
+  skippedFields: string[];
+  error: string | null;
+  createdAt: string | null;
 }
 
 export interface AiEnrichStatus {
