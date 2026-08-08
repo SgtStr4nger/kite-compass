@@ -385,11 +385,6 @@ export default function AdminSpots() {
       renderCell: (s) => <span className="text-muted-foreground">{countryNameForCode(s.country) || "—"}</span>,
     },
     {
-      key: "months",
-      header: "Months",
-      renderCell: (s) => <span className="text-muted-foreground">{s.monthlyCount}</span>,
-    },
-    {
       key: "content",
       header: "Content",
       filterable: true,
