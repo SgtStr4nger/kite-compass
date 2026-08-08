@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { SiteLayout } from "@/components/SiteChrome";
 import { MonthPicker } from "@/components/Filters";
 import { FilterState, emptyFilters } from "@/components/Filters";
+import { LocationPicker, type LocationValue } from "@/components/LocationPicker";
 import { filtersToParams } from "@/lib/filterParams";
 import { SpotMap, MapPoint } from "@/components/SpotMap";
 import { Button } from "@/components/ui/button";
@@ -15,8 +16,10 @@ import { applyPageMetadata } from "@/lib/metadata";
 export default function Home() {
   const [, navigate] = useLocation();
   const [months, setMonths] = useState<string[]>([]);
+  const [location, setLocation] = useState<LocationValue>({ continents: [], countries: [] });
 
   const { data: allSpots } = useQuery<SpotListItem[]>({ queryKey: ["/api/spots"] });
+  const { data: countries = [] } = useQuery<string[]>({ queryKey: ["/api/countries"] });
   const { data: seo } = useQuery<PublicSeoState>({ queryKey: ["/api/seo"] });
 
   useEffect(() => {
@@ -35,15 +38,20 @@ export default function Home() {
       .map(s => ({ id: s.id, slug: s.slug, name: s.name, lat: s.latitude!, lng: s.longitude!, score: null })),
   [allSpots]);
 
+  const buildFilters = (): FilterState => ({
+    ...emptyFilters,
+    months,
+    continents: location.continents,
+    countries: location.countries,
+  });
+
   const search = () => {
-    const f: FilterState = { ...emptyFilters, months };
-    const qs = filtersToParams(f).toString();
+    const qs = filtersToParams(buildFilters()).toString();
     navigate(`/results${qs ? `?${qs}` : ""}`);
   };
 
   const moreFilters = () => {
-    const f: FilterState = { ...emptyFilters, months };
-    const qs = filtersToParams(f).toString();
+    const qs = filtersToParams(buildFilters()).toString();
     navigate(`/results${qs ? `?${qs}` : ""}`);
   };
 
@@ -72,6 +80,9 @@ export default function Home() {
           {/* Search card — spec §4.2: month selector + More filters + Find kite spots */}
           <div className="mx-auto mt-9 max-w-xl rounded-2xl border border-white/40 bg-background/95 p-4 text-left shadow-2xl backdrop-blur md:p-6">
             <MonthPicker value={months} onChange={setMonths} label="When do you want to go?" />
+            <div className="mt-5">
+              <LocationPicker countries={countries} value={location} onChange={setLocation} />
+            </div>
             <div className="mt-4 flex gap-3">
               <Button variant="outline" onClick={moreFilters} className="gap-2" data-testid="button-more-filters">
                 <SlidersHorizontal className="h-4 w-4" /> More filters
