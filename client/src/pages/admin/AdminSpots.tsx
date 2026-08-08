@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AdminSpotListItem, ExcelImportAction, ExcelImportHistoryItem, ExcelImportPreviewResponse } from "@/lib/types";
 import { countryNameForCode } from "@shared/locations";
-import { Plus, Search, Circle, CheckCircle2, PencilLine, BadgeInfo, ChevronDown, Download, SendHorizontal, RefreshCw, AlertTriangle, Clock3, Database, ArrowRight } from "lucide-react";
+import { Plus, Search, Circle, CheckCircle2, PencilLine, BadgeInfo, ChevronDown, Download, SendHorizontal, RefreshCw, AlertTriangle, ArrowRight } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 
@@ -184,19 +184,6 @@ export default function AdminSpots() {
       await refetch();
     } catch (e: any) {
       toast({ title: "Score recalculation failed", description: String(e.message || e), variant: "destructive" });
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const refreshSpot = async (id: number) => {
-    setBusy(id);
-    try {
-      await api("POST", `/api/admin/spots/${id}/enrich`);
-      toast({ title: "Spot refreshed" });
-      await refetch();
-    } catch (e: any) {
-      toast({ title: "Refresh failed", description: String(e.message || e), variant: "destructive" });
     } finally {
       setBusy(null);
     }
@@ -410,7 +397,6 @@ export default function AdminSpots() {
                     {sortBy === "publishedAt" ? (sortDir === "asc" ? "▲" : "▼") : null}
                   </button>
                 </th>
-                <th className="px-4 py-3 font-medium">Action</th>
               </tr>
             </thead>
             <tbody>
@@ -426,15 +412,9 @@ export default function AdminSpots() {
                   <td className="px-4 py-3 text-muted-foreground">{s.dataLastRefreshedAt ? new Date(s.dataLastRefreshedAt).toLocaleString() : <span className="inline-flex items-center gap-1"><AlertTriangle className="h-3.5 w-3.5" /> Never</span>}</td>
                   <td className="px-4 py-3 text-muted-foreground">{s.updatedAt ? new Date(s.updatedAt).toLocaleString() : "—"}</td>
                   <td className="px-4 py-3 text-muted-foreground">{s.publishedAt ? new Date(s.publishedAt).toLocaleString() : "—"}</td>
-                  <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                    <Button size="sm" variant="outline" onClick={() => refreshSpot(s.id)} disabled={running} data-testid={`button-refresh-spot-${s.slug}`}>
-                      {busy === s.id ? <Clock3 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-                      Refresh spot
-                    </Button>
-                  </td>
                 </tr>
               ))}
-              {filtered.length === 0 && <tr><td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">No spots found.</td></tr>}
+              {filtered.length === 0 && <tr><td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">No spots found.</td></tr>}
             </tbody>
           </table>
         </div>
