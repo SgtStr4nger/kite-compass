@@ -82,6 +82,7 @@ export const spots = sqliteTable("spots", {
   published: integer("published", { mode: "boolean" }).default(false),
   hasDraft: integer("has_draft", { mode: "boolean" }).default(true),
   publishedSnapshot: text("published_snapshot"), // JSON of last published version
+  publishedAt: text("published_at"), // ISO timestamp of last content publish
   // soft delete (30-day restorable)
   deletedAt: text("deleted_at"),
   createdAt: text("created_at"),

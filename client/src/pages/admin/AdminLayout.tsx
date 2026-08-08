@@ -3,7 +3,7 @@ import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { CompassMark } from "@/components/Logo";
 import { Button } from "@/components/ui/button";
-import { LogOut, LayoutGrid, Database, FileText, ExternalLink, School, Hotel, Users, Search, Trash2, ArrowRightLeft, AlertCircle, CloudSun, Rocket, RefreshCw } from "lucide-react";
+import { LogOut, LayoutGrid, FileText, ExternalLink, School, Hotel, Users, Search, Trash2, ArrowRightLeft, AlertCircle, CloudSun, Rocket, RefreshCw } from "lucide-react";
 import { applyRobotsMetadata } from "@/lib/metadata";
 import { api } from "@/lib/api";
 import { ExcelImportStatus, ScoringStatus, WeatherRefreshStatus } from "@/lib/types";
@@ -230,12 +230,12 @@ export function AdminLayout({ children }: { children: ReactNode }) {
             {navLink("/admin/spots", <LayoutGrid className="h-4 w-4" />, "Spots", "link-admin-spots")}
             {navLink("/admin/listings/schools", <School className="h-4 w-4" />, "Kite Schools", "link-admin-listings-schools")}
             {navLink("/admin/listings/stays", <Hotel className="h-4 w-4" />, "Stays", "link-admin-listings-stays")}
-            {navLink("/admin/data", <Database className="h-4 w-4" />, "Data", "link-admin-data")}
             {navLink("/admin/trash", <Trash2 className="h-4 w-4" />, "Trash", "link-admin-trash")}
           </div>
 
           <div className="pt-2">
             <div className="px-3 pb-1 text-xs font-medium uppercase tracking-wide text-sidebar-foreground/50">Settings</div>
+            {navLink("/admin/scoring", <Sparkles className="h-4 w-4" />, "Scoring", "link-admin-scoring")}
             {navLink("/admin/seo", <Search className="h-4 w-4" />, "SEO", "link-admin-seo")}
             {navLink("/admin/redirects", <ArrowRightLeft className="h-4 w-4" />, "Redirects", "link-admin-redirects")}
             {navLink("/admin/legal", <FileText className="h-4 w-4" />, "Legal", "link-admin-legal")}

@@ -226,6 +226,7 @@ export interface Spot {
   published: boolean;
   hasDraft: boolean;
   publishedSlug?: string;
+  publishedAt?: string | null;
 }
 
 export interface SpotListItem extends Spot {

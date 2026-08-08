@@ -60,7 +60,7 @@ async function run() {
       vibeTags: JSON.stringify(s.vibe_tags || []),
       internalNotes: "", sourceNotes: s.source_notes || "",
       rankingMode: "manual",
-      published: true, hasDraft: false,
+      published: true, hasDraft: false, publishedAt: now(),
       updatedAt: now(),
     };
     const ex = db.select().from(spots).where(eq(spots.slug, s.slug)).get();
