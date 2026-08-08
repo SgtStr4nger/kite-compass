@@ -197,7 +197,7 @@ export function LocationPicker({
                           <span className="pointer-events-none">
                             <Checkbox checked={selected} />
                           </span>
-                          <span>{country}</span>
+                          <span>{countryNameForCode(country)}</span>
                         </CommandItem>
                       );
                     })}
@@ -212,14 +212,14 @@ export function LocationPicker({
                     return (
                       <CommandItem
                         key={country}
-                        value={country}
+                        value={`${countryNameForCode(country)} ${country}`}
                         onSelect={() => toggleCountry(country)}
                         data-testid={`location-country-${country}`}
                       >
                         <span className="pointer-events-none">
                           <Checkbox checked={selected} />
                         </span>
-                        <span>{country}</span>
+                        <span>{countryNameForCode(country)}</span>
                       </CommandItem>
                     );
                   })}
