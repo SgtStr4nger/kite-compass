@@ -3,7 +3,7 @@ import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { CompassMark } from "@/components/Logo";
 import { Button } from "@/components/ui/button";
-import { LogOut, LayoutGrid, FileText, ExternalLink, School, Hotel, Users, Search, Trash2, ArrowRightLeft, AlertCircle, CloudSun, Rocket, RefreshCw } from "lucide-react";
+import { LogOut, LayoutGrid, FileText, ExternalLink, School, Hotel, Users, Search, Trash2, ArrowRightLeft, AlertCircle, CloudSun, Rocket, RefreshCw, Settings } from "lucide-react";
 import { applyRobotsMetadata } from "@/lib/metadata";
 import { api } from "@/lib/api";
 import { ExcelImportStatus, ScoringStatus, WeatherRefreshStatus } from "@/lib/types";
@@ -236,6 +236,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
           <div className="pt-2">
             <div className="px-3 pb-1 text-xs font-medium uppercase tracking-wide text-sidebar-foreground/50">Settings</div>
             {navLink("/admin/scoring", <Sparkles className="h-4 w-4" />, "Scoring", "link-admin-scoring")}
+            {navLink("/admin/settings", <Settings className="h-4 w-4" />, "Settings", "link-admin-settings")}
             {navLink("/admin/seo", <Search className="h-4 w-4" />, "SEO", "link-admin-seo")}
             {navLink("/admin/redirects", <ArrowRightLeft className="h-4 w-4" />, "Redirects", "link-admin-redirects")}
             {navLink("/admin/legal", <FileText className="h-4 w-4" />, "Legal", "link-admin-legal")}

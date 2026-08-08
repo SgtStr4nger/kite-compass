@@ -8,6 +8,17 @@
  *   • Historical wind  → Archive API   https://archive-api.open-meteo.com/v1/archive
  *   • Historical waves → Marine API    https://marine-api.open-meteo.com/v1/marine
  *
+ * ── Billing / pacing ───────────────────────────────────────────────────────
+ * Open-Meteo meters the free tier by WEIGHTED "API calls", not raw requests:
+ *     weight = nLocations × (nDays / 14) × (nVariables / 10)
+ * with limits of 600/min, 5,000/hour, 10,000/day. With our 3,653-day window and
+ * 3 variables per call, a single full spot enrichment (archive + marine) costs
+ * ≈ 156.6 weighted calls (≈78.3 each), so a bulk run is deliberately paced well
+ * under the budget by server/services/openMeteoBudget.ts. `fetchJson` enforces
+ * the budget before each attempt and uses conservative exponential backoff
+ * (plus Retry-After and window-aware waiting) on 429s. `MIN_REQUEST_GAP_MS` is
+ * now only a politeness floor — the budget service does the real pacing.
+ *
  * Units (canonical, matching the rest of the app):
  *   • Wind  → knots      (Archive API called with wind_speed_unit=kn)
  *   • Waves → metres     (Marine API length_unit=metric)
@@ -50,6 +61,8 @@
  * most kite-relevant planning view and keeps the metric easy to explain.
  */
 
+import { waitForBudget, recordRequest, markWindowFull, getOpenMeteoBudget } from "./openMeteoBudget";
+
 // ── Configuration ──────────────────────────────────────────────────────────
 /** A day counts as kiteable when daylight hours hit this wind threshold. */
 export const KITEABLE_WIND_THRESHOLD_KNOTS = 15;
@@ -76,7 +89,8 @@ const openMeteoStats = {
   failedRequests: 0,
 };
 
-const MIN_REQUEST_GAP_MS = 1200;
+/** Politeness floor between raw requests; the budget service does the real pacing. */
+const MIN_REQUEST_GAP_MS = 250;
 let lastRequestAt = 0;
 
 async function waitForRequestSlot(): Promise<void> {
@@ -87,9 +101,15 @@ async function waitForRequestSlot(): Promise<void> {
 }
 
 export function getOpenMeteoStats() {
+  const budget = getOpenMeteoBudget();
   return {
     ...openMeteoStats,
     totalRequests: openMeteoStats.archiveRequests + openMeteoStats.marineRequests,
+    perSpotCost: budget.perSpotCost,
+    limits: budget.limits,
+    usage: budget.usage,
+    waitState: budget.waitState,
+    pacing: { ...budget.pacing, requestGapFloorMs: MIN_REQUEST_GAP_MS },
   };
 }
 
@@ -167,18 +187,29 @@ const shiftDate = (d: string, days: number) => {
   return new Date(Date.UTC(y, m - 1, dd + days)).toISOString().slice(0, 10);
 };
 
+/** Conservative exponential backoff (ms) with jitter, capped at 60s. */
+function backoffMs(attempt: number): number {
+  return Math.min(1000 * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 500), 60_000);
+}
+
 async function fetchJson(url: string): Promise<any> {
   const isArchive = url.includes("archive-api.open-meteo.com");
   const isMarine = url.includes("marine-api.open-meteo.com");
-  const attempts = 3;
+  const attempts = 5;
   let lastError: Error | null = null;
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
     await waitForRequestSlot();
     if (isArchive) openMeteoStats.archiveRequests++;
     if (isMarine) openMeteoStats.marineRequests++;
+    // Enforce the weighted budget before each attempt. Long waits are surfaced
+    // to the admin banner via the wait listener (throttled inside the service).
+    await waitForBudget(url);
     const res = await fetch(url);
-    if (res.ok) return res.json();
+    if (res.ok) {
+      recordRequest(url, res.status); // billable consumption counts toward the meters
+      return res.json();
+    }
 
     openMeteoStats.failedRequests++;
     let detail = res.statusText;
@@ -186,7 +217,20 @@ async function fetchJson(url: string): Promise<any> {
     lastError = new Error(`Open-Meteo ${res.status}: ${detail}`);
     const retryable = res.status === 429 || res.status === 502 || res.status === 503 || res.status === 504;
     if (!retryable || attempt === attempts) break;
-    await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+
+    let waitMs: number;
+    if (res.status === 429) {
+      // Treat the current minute/hour/day windows as exhausted until they roll
+      // over — the next attempt will wait on the budget instead of blind retries.
+      markWindowFull();
+      const retryAfter = Number(res.headers.get("retry-after"));
+      waitMs = Number.isFinite(retryAfter) && retryAfter > 0
+        ? Math.min(retryAfter * 1000, 300_000)
+        : backoffMs(attempt);
+    } else {
+      waitMs = backoffMs(attempt);
+    }
+    await new Promise(resolve => setTimeout(resolve, waitMs));
   }
   throw lastError ?? new Error("Open-Meteo request failed");
 }

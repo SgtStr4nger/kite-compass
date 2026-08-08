@@ -174,6 +174,42 @@ export interface WeatherRefreshStatus {
   visible: boolean;
 }
 
+export interface OpenMeteoWindowUsage {
+  used: number;
+  limit: number;
+  resetsAt: number;
+}
+
+export interface OpenMeteoWaitState {
+  active: boolean;
+  window?: "minute" | "hour" | "day";
+  waitMs?: number;
+  resumesAt?: string;
+}
+
+export interface OpenMeteoUsage {
+  archiveRequests: number;
+  marineRequests: number;
+  failedRequests: number;
+  totalRequests: number;
+  perSpotCost: {
+    nDays: number;
+    archive: { weight: number; variables: number };
+    marine: { weight: number; variables: number };
+    total: number;
+  };
+  limits: { minute: number; hour: number; day: number };
+  usage: { minute: OpenMeteoWindowUsage; hour: OpenMeteoWindowUsage; day: OpenMeteoWindowUsage };
+  waitState: OpenMeteoWaitState;
+  pacing: {
+    mode: string;
+    requestGapFloorMs: number;
+    effectiveSpotsPerMinute: number;
+    effectiveSpotsPerHour: number;
+    effectiveSpotsPerDay: number;
+  };
+}
+
 export interface AdminUser {
   id: number;
   email: string;

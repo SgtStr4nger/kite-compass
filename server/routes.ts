@@ -8,6 +8,7 @@ import { db, storage, sqlite, logError } from "./storage";
 import { log } from "./log";
 import type { ListingsFilter, SeoContent, TrashCategory, RedirectRow, AdminErrorStatus } from "./storage";
 import { enrichSpotById, MissingCoordinatesError } from "./services/enrichment";
+import { getWaitState, setBudgetWaitListener } from "./services/openMeteoBudget";
 import { reverseGeocodeCountry } from "./services/reverseGeocode";
 import { getContinentForCountry, countryNameForCode, normalizeCountryCode } from "@shared/locations";
 import { bestEvaluableScore, calculateAutoMonthlyScore, DEFAULT_SCORING_CONFIG, deriveSeasonLabelFromScore, resolveMonthlyScore, scoringConfigSchema, type ScoringConfig } from "@shared/scoring";
@@ -27,9 +28,6 @@ type WeatherStatus = "Missing" | "Up to date" | "Up to date · Manual changes" |
 let scoringRecalcActive = false;
 
 const REFRESH_SPOT_DELAY_MS = 1500;
-const OPEN_METEO_MAX_REQUESTS_PER_MINUTE = 50;
-const ESTIMATED_REQUESTS_PER_SPOT_REFRESH = 2;
-const OPEN_METEO_WINDOW_MS = 60_000;
 const EXCEL_MAX_ROWS = 5000;
 const EXCEL_RETENTION_DAYS = 30;
 const EXCEL_ACTIVE_STATUSES = new Set(["Uploading", "Validating", "Ready for confirmation", "Importing", "Rolling back"]);
@@ -1018,6 +1016,14 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/** Format an ISO timestamp as local "HH:MM:SS" for status messages. */
+function formatClockTime(iso?: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
 /**
  * Validate + normalize an incoming scoring-config body. Missing fields fall back
  * to the defaults (so a partial PATCH still resolves to a full config), then the
@@ -1116,8 +1122,11 @@ export interface WeatherRefreshFailure {
 
 /**
  * Shared Open-Meteo batch refresh: full wind + marine re-enrichment for the given
- * spots, honoring the per-minute request budget and updating the weather-refresh
- * progress state. Writes DRAFTS only (never auto-publishes — callers decide).
+ * spots, updating the weather-refresh progress state. Pacing is enforced by the
+ * billing-aware budget service (server/services/openMeteoBudget.ts) which the
+ * enrichment calls flow through — this loop only adds a per-spot politeness
+ * floor and surfaces budget waits in the banner. Writes DRAFTS only (never
+ * auto-publishes — callers decide).
  * Used by both the admin "Refresh weather data" endpoint and the scoring-publish
  * re-enrichment path (when the kiteable-day threshold changed).
  */
@@ -1154,17 +1163,24 @@ async function runWeatherRefreshForSpots(spots: Spot[], opts: { kiteableDayMinHo
 
   const updatedSpotIds: number[] = [];
   const failures: WeatherRefreshFailure[] = [];
-  let windowStart = Date.now();
-  let estimatedRequestsInWindow = 0;
+  // Mutable progress cursor shared with the budget-wait listener below.
+  const progress = { completed: 0 };
+
+  // Surface long budget waits (rate-limit / 429) in the status banner message.
+  setBudgetWaitListener((info) => {
+    if (!info) return; // wait ended — the loop's finally writes the next message
+    void storage.setWeatherRefreshStatus({
+      status: "Refreshing weather data",
+      totalSpots: eligible.length,
+      completedSpots: progress.completed,
+      message: `Refreshing weather data (${progress.completed}/${eligible.length}) — waiting for Open-Meteo ${info.window} budget, resumes ${formatClockTime(info.resumesAt)}`,
+      dismissible: false,
+      dismissed: false,
+    });
+  });
 
   for (let i = 0; i < eligible.length; i++) {
     const spot = eligible[i];
-    if (estimatedRequestsInWindow + ESTIMATED_REQUESTS_PER_SPOT_REFRESH > OPEN_METEO_MAX_REQUESTS_PER_MINUTE) {
-      const waitMs = OPEN_METEO_WINDOW_MS - (Date.now() - windowStart);
-      if (waitMs > 0) await sleep(waitMs);
-      windowStart = Date.now();
-      estimatedRequestsInWindow = 0;
-    }
     try {
       await enrichSpotById(spot.id, opts);
       updatedSpotIds.push(spot.id);
@@ -1173,13 +1189,16 @@ async function runWeatherRefreshForSpots(spots: Spot[], opts: { kiteableDayMinHo
       failures.push({ id: spot.id, slug: spot.slug, error: errMsg });
       void logError("Weather Enrichment", `Weather refresh failed for spot "${spot.name}": ${errMsg}`, `spot:${spot.id}`);
     } finally {
-      estimatedRequestsInWindow += ESTIMATED_REQUESTS_PER_SPOT_REFRESH;
-      const completed = i + 1;
+      progress.completed = i + 1;
+      const wait = getWaitState();
+      const waitMsg = wait?.active
+        ? ` — waiting for Open-Meteo ${wait.window} budget, resumes ${formatClockTime(wait.resumesAt)}`
+        : "";
       await storage.setWeatherRefreshStatus({
         status: "Refreshing weather data",
         totalSpots: eligible.length,
-        completedSpots: completed,
-        message: `Refreshing weather data (${completed}/${eligible.length})`,
+        completedSpots: progress.completed,
+        message: `Refreshing weather data (${progress.completed}/${eligible.length})${waitMsg}`,
         dismissible: false,
         dismissed: false,
       });
@@ -2619,31 +2638,38 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/admin/data/refresh", requireAuth, async (req, res) => {
     if (isExcelImportActive()) return res.status(409).json({ error: "Excel import is active" });
     if (weatherImportActive) return res.status(409).json({ error: "Weather import is already running" });
-    weatherImportActive = true;
-    try {
-      const scope = parseWeatherScope(req.body?.scope);
-      const scopedIds = new Set(parseSpotIds(req.body?.spotIds));
-      if ((scope === "selected" || scope === "filtered") && !scopedIds.size) {
-        return res.status(400).json({ error: "spotIds required for selected/filtered scope" });
-      }
-      const spots = await storage.listSpots(false);
-      const scopedSpots = spots.filter(spot => scopeMatchesSpot(scope, scopedIds, spot));
-      const scoring = await storage.getScoringContent();
-      const { updatedSpotIds, skipped, failures } = await runWeatherRefreshForSpots(scopedSpots, {
-        kiteableDayMinHours: scoring.published.kiteableDayMinHours,
-      });
-      res.json({ scope, updated: updatedSpotIds.length, skipped, failed: failures.length, failures });
-    } catch (error) {
-      await storage.setWeatherRefreshStatus({
-        status: "Weather refresh failed",
-        message: error instanceof Error ? error.message : "Weather refresh failed",
-        dismissible: true,
-        dismissed: false,
-      });
-      throw error;
-    } finally {
-      weatherImportActive = false;
+    const scope = parseWeatherScope(req.body?.scope);
+    const scopedIds = new Set(parseSpotIds(req.body?.spotIds));
+    if ((scope === "selected" || scope === "filtered") && !scopedIds.size) {
+      return res.status(400).json({ error: "spotIds required for selected/filtered scope" });
     }
+    const spots = await storage.listSpots(false);
+    const scopedSpots = spots.filter(spot => scopeMatchesSpot(scope, scopedIds, spot));
+
+    // Fire-and-forget: a full re-enrichment takes hours/days under the budget,
+    // so we respond immediately and let the background run update the
+    // DB-backed weather-refresh status (polled every 2s by the admin layout).
+    weatherImportActive = true;
+    void (async () => {
+      try {
+        const scoring = await storage.getScoringContent();
+        await runWeatherRefreshForSpots(scopedSpots, {
+          kiteableDayMinHours: scoring.published.kiteableDayMinHours,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Weather refresh failed";
+        await storage.setWeatherRefreshStatus({
+          status: "Weather refresh failed",
+          message,
+          dismissible: true,
+          dismissed: false,
+        });
+        void logError("Weather Enrichment", `Weather batch refresh failed: ${message}`, null);
+      } finally {
+        weatherImportActive = false;
+      }
+    })();
+    res.json({ started: true, totalSpots: scopedSpots.length });
   });
 
   app.post("/api/admin/data/publish", requireAuth, async (req, res) => {
