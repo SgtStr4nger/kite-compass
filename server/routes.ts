@@ -2387,31 +2387,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // a partial PATCH must never silently clear the flag.
     const manualFlag = body.countryManual !== undefined ? !!body.countryManual : !!(stored as any).countryManual;
     body.countryManual = manualFlag;
-    // A manual override only counts while there's an actual non-empty country
-    // value. A spot left with an empty country (e.g. the admin cleared it) is
-    // treated as auto — so it can be re-detected instead of staying locked.
-    const wasManual = !!(stored as any).countryManual && !!stored.country;
 
     const nextLat = Number.isFinite(body.latitude) ? body.latitude : stored.latitude;
     const nextLng = Number.isFinite(body.longitude) ? body.longitude : stored.longitude;
     const coordsOk = Number.isFinite(nextLat) && Number.isFinite(nextLng);
 
-    // 1) "Reset to automatic": flag explicitly cleared on a row that had it set.
-    if (!manualFlag && wasManual) {
-      if (coordsOk) {
-        const resolved = await autoResolveCountry(nextLat, nextLng);
-        if (resolved) body.country = resolved.country;
-      }
-    }
-    // 2) Coordinate-change recalculation (or backfilling a missing country) —
-    //    only while the country is auto-derived, never over a manual override.
-    else if (!wasManual && coordsOk) {
+    // Auto-detection runs only while the country is NOT a manual override. A
+    // manual override (incl. an explicitly emptied field) is respected as-is —
+    // publishing then requires the admin to fill it or hit "Reset to automatic".
+    if (!manualFlag && coordsOk) {
+      const resetFromManual = !!(stored as any).countryManual;
       const bodyHasCoords = body.latitude !== undefined || body.longitude !== undefined;
       const coordsTouched = bodyHasCoords && coordsChanged(stored.latitude, stored.longitude, body.latitude, body.longitude);
-      // Re-derive when coords changed, the country is missing, or the admin just
-      // cleared the field in this save.
-      const countryCleared = !stored.country || !String(body.country ?? "").trim();
-      if (coordsTouched || countryCleared) {
+      const countryEmpty = !stored.country || !String(body.country ?? "").trim();
+      if (resetFromManual || coordsTouched || countryEmpty) {
         const resolved = await autoResolveCountry(nextLat, nextLng);
         if (resolved) {
           body.country = resolved.country;
@@ -2420,8 +2409,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       }
     }
-    // 3) Manual entry (lenient): normalize a name/code to ISO-2 when possible,
-    //    otherwise store the raw value as-is — never blocks saving or publishing.
+    // Manual entry (lenient): normalize a name/code to ISO-2 when possible,
+    // otherwise store the raw value as-is — never blocks saving or publishing.
     if (manualFlag && body.country !== undefined) {
       const normalized = normalizeCountryCode(body.country);
       if (normalized) body.country = normalized;
@@ -2437,6 +2426,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const updated = await storage.updateSpot(id, body);
     if (!updated) return res.status(404).json({ error: "not found" });
     res.json(serializeSpot(updated));
+  });
+
+  // Live reverse geocoding for the admin editor: resolve a country from
+  // coordinates on demand (used to update the country field as coords change).
+  // Returns { code, name } on success and { code: null } when nothing resolves
+  // or the upstream call fails — the client leaves the field for manual entry.
+  app.get("/api/admin/geocode", requireAuth, async (req, res) => {
+    const lat = Number(req.query.lat);
+    const lng = Number(req.query.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return res.status(400).json({ error: "lat and lng required" });
+    }
+    try {
+      const result = await reverseGeocodeCountry(lat, lng);
+      res.json(result ? { code: result.code, name: result.name } : { code: null, name: "" });
+    } catch {
+      res.json({ code: null, name: "" });
+    }
   });
 
   app.post("/api/admin/spots/:id/publish", requireAuth, async (req, res) => {

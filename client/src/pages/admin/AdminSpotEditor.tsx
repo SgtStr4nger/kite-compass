@@ -162,6 +162,66 @@ export default function AdminSpotEditor() {
   // ── Weather enrichment (Open-Meteo, Pattern B: explicit admin action) ──
   const [enriching, setEnriching] = useState(false);
   const hasCoords = form.latitude != null && form.longitude != null;
+
+  // ── Live country detection (spec §22.3) ──
+  const [detectingCountry, setDetectingCountry] = useState(false);
+  const [countryDetectFailed, setCountryDetectFailed] = useState(false);
+  const geocodeCoords = useCallback(async (lat: number, lng: number) => {
+    try {
+      return await api<{ code: string | null; name: string }>("GET", `/api/admin/geocode?lat=${lat}&lng=${lng}`);
+    } catch {
+      return { code: null, name: "" };
+    }
+  }, []);
+  // Resolve the country for a coordinate pair; fills the field on success, or
+  // marks it red + empties it on failure so the admin must enter it manually.
+  // Never overwrites a manual override.
+  const detectFromCoords = useCallback(async (lat: number, lng: number) => {
+    setDetectingCountry(true);
+    const out = await geocodeCoords(lat, lng);
+    setDetectingCountry(false);
+    if (out.code) {
+      setCountryDetectFailed(false);
+      setForm(f => (f.countryManual ? f : { ...f, country: out.code! }));
+    } else {
+      setCountryDetectFailed(true);
+      setForm(f => (f.countryManual ? f : { ...f, country: "" }));
+    }
+  }, [geocodeCoords]);
+  // As soon as coordinates are entered/changed — and while the country is NOT a
+  // manual override — re-resolve the country from the coords (debounced).
+  useEffect(() => {
+    if (form.countryManual) return;
+    const lat = form.latitude, lng = form.longitude;
+    if (lat == null || lng == null || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return;
+    const timer = setTimeout(() => { void detectFromCoords(Number(lat), Number(lng)); }, 600);
+    return () => clearTimeout(timer);
+  }, [form.latitude, form.longitude, form.countryManual, detectFromCoords]);
+
+  // Country status is ALWAYS shown under the field (stable layout). One of:
+  //   • no coords            → hint to enter coords
+  //   • detecting            → in-progress
+  //   • auto-detected        → success (green)
+  //   • detection failed     → error (red), requires manual input
+  //   • manual (filled)      → neutral
+  //   • manual (empty)       → error (red), required for publishing
+  const countryStatus: { text: string; tone: "muted" | "success" | "error" } = (() => {
+    if (!hasCoords) return { text: "Enter latitude & longitude to auto-detect the country.", tone: "muted" };
+    if (detectingCountry) return { text: "Detecting country from coordinates…", tone: "muted" };
+    if (form.countryManual) {
+      return form.country
+        ? { text: "Manual input — the country will not be auto-updated.", tone: "muted" }
+        : { text: "Manual input — a country is required for publishing.", tone: "error" };
+    }
+    if (countryDetectFailed) return { text: "Could not detect a country — enter it manually (required for publishing).", tone: "error" };
+    if (form.country) return { text: "Detected automatically from coordinates.", tone: "success" };
+    return { text: "Detecting country from coordinates…", tone: "muted" };
+  })();
+  const countryStatusClass =
+    countryStatus.tone === "error" ? "text-destructive" :
+    countryStatus.tone === "success" ? "text-emerald-700" : "text-muted-foreground";
+  const countryInvalid = countryStatus.tone === "error";
+
   const enrich = async () => {
     // Persist any unsaved coordinate edits first so the server reads current values.
     const sid = await saveSpot();
@@ -307,9 +367,11 @@ export default function AdminSpotEditor() {
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
                   <Input
-                    value={countryNameForCode(form.country)}
-                    onChange={e => { const v = e.target.value; set("country", v); set("countryManual", v.trim().length > 0); }}
+                    value={detectingCountry ? "Detecting…" : countryNameForCode(form.country)}
+                    onChange={e => { set("country", e.target.value); set("countryManual", true); setCountryDetectFailed(false); }}
                     placeholder="Auto-detected from coordinates"
+                    aria-invalid={countryInvalid}
+                    className={countryInvalid ? "border-destructive focus-visible:ring-destructive" : ""}
                     data-testid="input-country"
                   />
                   <Button
@@ -317,18 +379,27 @@ export default function AdminSpotEditor() {
                     variant="outline"
                     size="sm"
                     className="shrink-0"
-                    onClick={async () => { set("countryManual", false); await saveSpot(); }}
-                    disabled={!hasCoords}
+                    onClick={() => {
+                      // Revert to automatic: clear the override and immediately re-detect.
+                      set("countryManual", false);
+                      setCountryDetectFailed(false);
+                      const lat = form.latitude, lng = form.longitude;
+                      if (lat != null && lng != null && Number.isFinite(Number(lat)) && Number.isFinite(Number(lng))) {
+                        void detectFromCoords(Number(lat), Number(lng));
+                      }
+                    }}
+                    disabled={!form.countryManual || !hasCoords}
+                    title={form.countryManual ? "Revert to the country detected from coordinates" : "Country is auto-detected from coordinates"}
                     data-testid="button-country-reset"
                   >
                     Reset to automatic
                   </Button>
                 </div>
-                {!form.country && hasCoords ? (
-                  <p className="flex items-start gap-1.5 text-xs text-amber-700" data-testid="text-country-hint">
-                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> Auto-detection failed — enter the country manually (required for publishing).
-                  </p>
-                ) : null}
+                <p className={`flex items-start gap-1.5 text-xs min-h-[2.5rem] ${countryStatusClass}`} data-testid="text-country-status">
+                  {countryStatus.tone === "error" && <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
+                  {countryStatus.tone === "success" && <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
+                  {countryStatus.text}
+                </p>
               </div>
             </Field>
             <Field label="Region"><Input value={form.region || ""} onChange={e => set("region", e.target.value)} data-testid="input-region" /></Field>
