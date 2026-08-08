@@ -6,17 +6,26 @@ import { AdminLayout } from "./AdminLayout";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
-import { AdminSpotListItem, ExcelImportAction, ExcelImportHistoryItem, ExcelImportPreviewResponse } from "@/lib/types";
-import { countryNameForCode } from "@shared/locations";
-import { Plus, Search, Circle, CheckCircle2, PencilLine, BadgeInfo, ChevronDown, Download, SendHorizontal, RefreshCw, AlertTriangle, ArrowRight } from "lucide-react";
+import AdminDataTable from "@/components/admin/AdminDataTable";
+import {
+  AdminSpotListItem,
+  ExcelImportAction,
+  ExcelImportHistoryItem,
+  ExcelImportPreviewResponse,
+  ListingsPage,
+  AdminTableColumn,
+  ColumnFilterValue,
+  AdminFilterOption,
+} from "@/lib/types";
+import { countryNameForCode, ISO2_TO_COUNTRY } from "@shared/locations";
+import { Plus, CheckCircle2, PencilLine, Circle, BadgeInfo, ChevronDown, Download, SendHorizontal, RefreshCw, ArrowRight, AlertTriangle } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 
 function StatusPill({ published, hasDraft }: { published: boolean; hasDraft: boolean }) {
   if (published && !hasDraft) return <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700"><CheckCircle2 className="h-3.5 w-3.5" /> Published</span>;
-  if (published && hasDraft) return <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700"><PencilLine className="h-3.5 w-3.5" /> Published · draft edits</span>;
-  return <span className="inline-flex items-center gap-1 text-xs font-medium text-stone-500"><Circle className="h-3.5 w-3.5" /> Draft</span>;
+  if (published && hasDraft) return <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700"><PencilLine className="h-3.5 w-3.5" /> Draft edits</span>;
+  return <span className="inline-flex items-center gap-1 text-xs font-medium text-stone-500"><Circle className="h-3.5 w-3.5" /> Draft only</span>;
 }
 function DataPill({ status }: { status?: "fresh" | "dirty" | "missing" }) {
   if (status === "fresh") return <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700"><CheckCircle2 className="h-3.5 w-3.5" /> Fresh</span>;
@@ -40,55 +49,126 @@ function toBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-type DataView = "all" | "dirty" | "missing" | "fresh";
-type SortKey = "name" | "updatedAt" | "publishedAt";
+type SortKey = "name" | "updatedAt" | "lastPublishedAt";
+
+interface SpotsTableState {
+  q: string;
+  countries: string[];
+  contentStatus: string;
+  dataStatus: string;
+  updatedFrom: string;
+  updatedTo: string;
+  publishedFrom: string;
+  publishedTo: string;
+  sortBy: SortKey;
+  sortDir: "asc" | "desc";
+  page: number;
+  perPage: number;
+}
+
+function parseUrlState(search: string): SpotsTableState {
+  const p = new URLSearchParams(search);
+  return {
+    q: p.get("q") || "",
+    countries: p.getAll("countries"),
+    contentStatus: p.get("contentStatus") || "",
+    dataStatus: p.get("dataStatus") || "",
+    updatedFrom: p.get("updatedFrom") || "",
+    updatedTo: p.get("updatedTo") || "",
+    publishedFrom: p.get("publishedFrom") || "",
+    publishedTo: p.get("publishedTo") || "",
+    sortBy: (p.get("sortBy") as SortKey) || "updatedAt",
+    sortDir: (p.get("sortDir") as "asc" | "desc") || "desc",
+    page: Number(p.get("page") || "1"),
+    perPage: Number(p.get("perPage") || "50"),
+  };
+}
+
+const COUNTRY_OPTIONS: AdminFilterOption[] = Object.entries(ISO2_TO_COUNTRY)
+  .map(([value, label]) => ({ value, label }))
+  .sort((a, b) => a.label.localeCompare(b.label));
 
 export default function AdminSpots() {
   const { token } = useAuth();
   const [, navigate] = useLocation();
-  const [q, setQ] = useState("");
-  const [view, setView] = useState<DataView>("all");
+  const [location] = useLocation();
+  const { toast } = useToast();
+
+  const [state, setState] = useState<SpotsTableState>(() => parseUrlState(window.location.search));
+  const [data, setData] = useState<ListingsPage<AdminSpotListItem> | null>(null);
+  const [loading, setLoading] = useState(false);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
-  const [sortBy, setSortBy] = useState<SortKey>("updatedAt");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [preview, setPreview] = useState<ExcelImportPreviewResponse | null>(null);
   const [importBusy, setImportBusy] = useState(false);
   const [history, setHistory] = useState<ExcelImportHistoryItem[]>([]);
   const [busy, setBusy] = useState<null | string | number>(null);
-  const { toast } = useToast();
 
   useEffect(() => { if (!token) navigate("/admin"); }, [token, navigate]);
-  const { data: spots, isLoading, refetch } = useQuery<AdminSpotListItem[]>({ queryKey: ["/api/admin/spots"], enabled: !!token });
+  useEffect(() => { setState(parseUrlState(window.location.search)); }, [location]);
+
   const { data: usage } = useQuery<{ archiveRequests: number; marineRequests: number; failedRequests: number; totalRequests: number }>({
     queryKey: ["/api/admin/usage/open-meteo"], enabled: !!token,
   });
 
-  const dataRows = useMemo(() => (spots ?? []).map(s => ({
-    ...s,
-    dataStatus: s.dataStatus || (s.dataLastRefreshedAt ? "fresh" : "missing") as "fresh" | "dirty" | "missing",
-  })), [spots]);
+  const pushState = (next: SpotsTableState) => {
+    const p = new URLSearchParams();
+    if (next.q) p.set("q", next.q);
+    next.countries.forEach((c) => p.append("countries", c));
+    if (next.contentStatus) p.set("contentStatus", next.contentStatus);
+    if (next.dataStatus) p.set("dataStatus", next.dataStatus);
+    if (next.updatedFrom) p.set("updatedFrom", next.updatedFrom);
+    if (next.updatedTo) p.set("updatedTo", next.updatedTo);
+    if (next.publishedFrom) p.set("publishedFrom", next.publishedFrom);
+    if (next.publishedTo) p.set("publishedTo", next.publishedTo);
+    p.set("sortBy", next.sortBy);
+    p.set("sortDir", next.sortDir);
+    p.set("page", String(next.page));
+    p.set("perPage", String(next.perPage));
+    window.history.replaceState({}, "", `${window.location.pathname}?${p.toString()}`);
+    setState(next);
+  };
 
-  const filtered = useMemo(() => {
-    const haystack = (s: AdminSpotListItem) => `${s.name} ${s.country || ""} ${countryNameForCode(s.country)}`.toLowerCase();
-    const base = dataRows.filter(s => view === "all" ? true : s.dataStatus === view).filter(s => haystack(s).includes(q.trim().toLowerCase()));
-    return base.sort((a, b) => {
-      let cmp = 0;
-      if (sortBy === "name") cmp = a.name.localeCompare(b.name);
-      else if (sortBy === "publishedAt") cmp = (a.publishedAt || "").localeCompare(b.publishedAt || "");
-      else cmp = (a.updatedAt || "").localeCompare(b.updatedAt || "");
-      return sortDir === "asc" ? cmp : -cmp;
-    });
-  }, [dataRows, q, view, sortBy, sortDir]);
-  const filteredIds = filtered.map(s => s.id);
-  const allFilteredSelected = filteredIds.length > 0 && filteredIds.every(id => selectedIds.includes(id));
-  const filtersActive = q.trim().length > 0 || view !== "all";
-  const selectedVisibleCount = filtered.filter(s => selectedIds.includes(s.id)).length;
+  const filters = useMemo(
+    () => ({
+      name: state.q || undefined,
+      country: state.countries,
+      content: state.contentStatus || undefined,
+      data: state.dataStatus || undefined,
+      updatedAt: { from: state.updatedFrom || undefined, to: state.updatedTo || undefined },
+      publishedAt: { from: state.publishedFrom || undefined, to: state.publishedTo || undefined },
+    }),
+    [state.q, state.countries, state.contentStatus, state.dataStatus, state.updatedFrom, state.updatedTo, state.publishedFrom, state.publishedTo],
+  );
 
-  // Prune stale selections when the underlying list changes (e.g. after refresh).
+  const filtersActive = state.q.length > 0 || state.countries.length > 0 || !!state.contentStatus || !!state.dataStatus || !!state.updatedFrom || !!state.updatedTo || !!state.publishedFrom || !!state.publishedTo;
+
   useEffect(() => {
-    const existingIds = new Set(dataRows.map(row => row.id));
-    setSelectedIds(prev => prev.filter(id => existingIds.has(id)));
-  }, [dataRows]);
+    if (!token) return;
+    setLoading(true);
+    const p = new URLSearchParams();
+    if (state.q) p.set("search", state.q);
+    state.countries.forEach((c) => p.append("countries", c));
+    if (state.contentStatus) p.set("contentStatus", state.contentStatus);
+    if (state.dataStatus) p.set("dataStatus", state.dataStatus);
+    if (state.updatedFrom) p.set("updatedFrom", state.updatedFrom);
+    if (state.updatedTo) p.set("updatedTo", state.updatedTo);
+    if (state.publishedFrom) p.set("publishedFrom", state.publishedFrom);
+    if (state.publishedTo) p.set("publishedTo", state.publishedTo);
+    p.set("sortBy", state.sortBy);
+    p.set("sortDir", state.sortDir);
+    p.set("page", String(state.page));
+    p.set("perPage", String(state.perPage));
+    api<ListingsPage<AdminSpotListItem>>("GET", `/api/admin/listings/spots?${p.toString()}`)
+      .then(setData)
+      .catch(() => toast({ title: "Failed to load", variant: "destructive" }))
+      .finally(() => setLoading(false));
+  }, [state, token, toast]);
+
+  // Prune stale selections when the underlying list changes.
+  useEffect(() => {
+    const existingIds = new Set((data?.items ?? []).map((row) => row.id));
+    setSelectedIds((prev) => prev.filter((id) => existingIds.has(id)));
+  }, [data?.items]);
 
   const loadHistory = async () => setHistory(await api<ExcelImportHistoryItem[]>("GET", "/api/admin/excel/import/spots/history"));
   useEffect(() => { if (token) void loadHistory(); }, [token]);
@@ -99,12 +179,25 @@ export default function AdminSpots() {
       .catch(() => {});
   }, [token, preview]);
 
+  const filteredIds = (data?.items ?? []).map((s) => s.id);
+
   const exportRows = async (scope: "selected" | "filtered" | "all") => {
     try {
       const out = await api<{ fileName: string; fileBase64: string }>("POST", "/api/admin/excel/export/spots", {
         scope,
         selectedIds,
-        filters: { q },
+        filters: {
+          search: state.q || undefined,
+          countries: state.countries,
+          contentStatus: state.contentStatus || undefined,
+          dataStatus: state.dataStatus || undefined,
+          updatedFrom: state.updatedFrom || undefined,
+          updatedTo: state.updatedTo || undefined,
+          publishedFrom: state.publishedFrom || undefined,
+          publishedTo: state.publishedTo || undefined,
+          sortBy: state.sortBy,
+          sortDir: state.sortDir,
+        },
       });
       downloadBase64(out.fileName, out.fileBase64);
     } catch (e: any) {
@@ -137,7 +230,7 @@ export default function AdminSpots() {
         title: `${modeLabel} publish finished`,
         description: `${out.targetSpots} spots, ${out.contentPublished} content updates, ${out.weatherPublished} weather rows, ${out.recalculatedRows} score rows recalculated`,
       });
-      await refetch();
+      pushState({ ...state });
     } catch (e: any) {
       toast({ title: "Bulk publish failed", description: String(e.message || e), variant: "destructive" });
     } finally {
@@ -151,7 +244,7 @@ export default function AdminSpots() {
     try {
       const out = await api<{ updated: number; skipped: number; failed: number }>("POST", "/api/admin/data/refresh", { scope, spotIds });
       toast({ title: `Refreshed ${out.updated} spots`, description: `${out.skipped} skipped, ${out.failed} failed` });
-      await refetch();
+      pushState({ ...state });
     } catch (e: any) {
       toast({ title: "Refresh failed", description: String(e.message || e), variant: "destructive" });
     } finally {
@@ -168,7 +261,7 @@ export default function AdminSpots() {
         title: `Published ${out.published} weather record(s)`,
         description: `${out.skipped} skipped (${out.alreadyPublished} already published, ${out.noMonthlyData} with no monthly rows)`,
       });
-      await refetch();
+      pushState({ ...state });
     } catch (e: any) {
       toast({ title: "Could not publish weather data", description: String(e.message || e), variant: "destructive" });
     } finally {
@@ -181,7 +274,7 @@ export default function AdminSpots() {
     try {
       const out = await api<{ updated: number }>("POST", "/api/admin/scores/recalculate", spotIds.length ? { spotIds } : {});
       toast({ title: "Scores recalculated", description: `${out.updated} monthly rows updated` });
-      await refetch();
+      pushState({ ...state });
     } catch (e: any) {
       toast({ title: "Score recalculation failed", description: String(e.message || e), variant: "destructive" });
     } finally {
@@ -189,9 +282,44 @@ export default function AdminSpots() {
     }
   };
 
-  const toggleSort = (key: SortKey) => {
-    if (sortBy === key) setSortDir(sortDir === "asc" ? "desc" : "asc");
-    else { setSortBy(key); setSortDir(key === "name" ? "asc" : "desc"); }
+  const onSortChange = (key: string) => {
+    const k = key as SortKey;
+    if (state.sortBy === k) {
+      pushState({ ...state, sortDir: state.sortDir === "asc" ? "desc" : "asc", page: 1 });
+    } else {
+      pushState({ ...state, sortBy: k, sortDir: k === "name" ? "asc" : "desc", page: 1 });
+    }
+  };
+
+  const onFilterChange = (key: string, value: ColumnFilterValue) => {
+    const next: SpotsTableState = { ...state, page: 1 };
+    switch (key) {
+      case "name":
+        next.q = typeof value === "string" ? value : "";
+        break;
+      case "country":
+        next.countries = Array.isArray(value) ? value as string[] : [];
+        break;
+      case "content":
+        next.contentStatus = typeof value === "string" ? value : "";
+        break;
+      case "data":
+        next.dataStatus = typeof value === "string" ? value : "";
+        break;
+      case "updatedAt": {
+        const r = (value && typeof value === "object" ? value : {}) as { from?: string; to?: string };
+        next.updatedFrom = r.from ?? "";
+        next.updatedTo = r.to ?? "";
+        break;
+      }
+      case "publishedAt": {
+        const r = (value && typeof value === "object" ? value : {}) as { from?: string; to?: string };
+        next.publishedFrom = r.from ?? "";
+        next.publishedTo = r.to ?? "";
+        break;
+      }
+    }
+    pushState(next);
   };
 
   const onUpload = async (file: File | null) => {
@@ -215,7 +343,8 @@ export default function AdminSpots() {
     try {
       await api("POST", "/api/admin/excel/import/spots/commit", { previewId: preview.previewId, action });
       setPreview(null);
-      await Promise.all([loadHistory(), refetch()]);
+      await loadHistory();
+      pushState({ ...state });
       toast({ title: "Import completed" });
     } catch (e: any) {
       toast({ title: "Import failed", description: String(e.message || e), variant: "destructive" });
@@ -237,12 +366,72 @@ export default function AdminSpots() {
 
   const running = busy !== null;
 
+  const columns: AdminTableColumn<AdminSpotListItem>[] = [
+    {
+      key: "name",
+      header: "Name",
+      sortable: true,
+      filterable: true,
+      filterType: "text",
+      renderCell: (s) => <span className="font-medium text-foreground">{s.name}</span>,
+    },
+    {
+      key: "country",
+      header: "Country",
+      sortable: true,
+      filterable: true,
+      filterType: "multiselect",
+      filterOptions: COUNTRY_OPTIONS,
+      renderCell: (s) => <span className="text-muted-foreground">{countryNameForCode(s.country) || "—"}</span>,
+    },
+    {
+      key: "content",
+      header: "Content",
+      filterable: true,
+      filterType: "select",
+      filterOptions: [
+        { value: "published", label: "Published" },
+        { value: "published-draft", label: "Draft edits" },
+        { value: "unpublished", label: "Draft only" },
+      ],
+      renderCell: (s) => <StatusPill published={s.published} hasDraft={s.hasDraft} />,
+    },
+    {
+      key: "data",
+      header: "Data",
+      filterable: true,
+      filterType: "select",
+      filterOptions: [
+        { value: "fresh", label: "Fresh" },
+        { value: "dirty", label: "Dirty" },
+        { value: "missing", label: "Missing" },
+      ],
+      renderCell: (s) => <DataPill status={s.dataStatus} />,
+    },
+    {
+      key: "updatedAt",
+      header: "Last updated",
+      sortable: true,
+      filterable: true,
+      filterType: "dateRange",
+      renderCell: (s) => <span className="text-xs text-muted-foreground">{s.updatedAt ? new Date(s.updatedAt).toLocaleString() : "—"}</span>,
+    },
+    {
+      key: "lastPublishedAt",
+      header: "Last published",
+      sortable: true,
+      filterable: true,
+      filterType: "dateRange",
+      renderCell: (s) => <span className="text-xs text-muted-foreground">{s.publishedAt ? new Date(s.publishedAt).toLocaleString() : "—"}</span>,
+    },
+  ];
+
   return (
     <AdminLayout>
       <div className="mb-6 flex items-start justify-between gap-4">
         <div>
           <h1 className="font-serif text-2xl font-semibold text-foreground">Spots</h1>
-          <p className="text-sm text-muted-foreground">{spots?.length ?? 0} total</p>
+          <p className="text-sm text-muted-foreground">{data?.total ?? 0} total</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => navigate("/admin/scoring")} data-testid="button-configure-scoring">
@@ -253,172 +442,137 @@ export default function AdminSpots() {
         </div>
       </div>
 
-      {usage && (
-        <div className="mb-4 rounded-2xl border border-card-border bg-card p-4 text-sm text-muted-foreground">
-          Open-Meteo requests this server process: {usage.totalRequests} total, {usage.archiveRequests} archive, {usage.marineRequests} marine, {usage.failedRequests} failed.
-        </div>
-      )}
-
-      <div className="mb-4 rounded-xl border border-border p-3">
-        <div className="mb-2 flex flex-wrap gap-2">
-          <div className="inline-flex">
-            <Button size="sm" variant="outline" onClick={() => exportRows(exportPrimaryScope)} className="rounded-r-none">
-              <Download className="mr-2 h-4 w-4" />
-              {exportPrimaryLabel}
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button size="sm" variant="outline" className="rounded-l-none border-l-0 px-2">
-                  <ChevronDown className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start">
-                {selectedIds.length > 0 && <DropdownMenuItem onClick={() => exportRows("selected")}>Export selected</DropdownMenuItem>}
-                {filtersActive && <DropdownMenuItem onClick={() => exportRows("filtered")}>Export filtered</DropdownMenuItem>}
-                <DropdownMenuItem onClick={() => exportRows("all")}>Export all</DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-          <div className="inline-flex">
-            <Button size="sm" disabled={running} onClick={() => void publishBulk("content-weather")} className="rounded-r-none">
-              <SendHorizontal className="mr-2 h-4 w-4" />
-              Publish all
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button size="sm" variant="outline" disabled={running} className="rounded-l-none border-l-0 px-2">
-                  <ChevronDown className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start">
-                <DropdownMenuItem onClick={() => void publishBulk("content")}>Publish content</DropdownMenuItem>
-                <DropdownMenuItem onClick={() => void publishBulk("weather")}>Publish weather data</DropdownMenuItem>
-                <DropdownMenuItem onClick={() => void publishBulk("content-weather")}>Publish all</DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-          <div className="inline-flex">
-            <Button size="sm" variant="outline" disabled={running} onClick={() => refreshScope(selectedIds.length ? "selected" : "filtered", selectedIds.length ? selectedIds : filteredIds)} className="rounded-r-none">
-              <RefreshCw className="mr-2 h-4 w-4" />
-              Refresh weather
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button size="sm" variant="outline" disabled={running} className="rounded-l-none border-l-0 px-2">
-                  <ChevronDown className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start">
-                {selectedIds.length > 0 && <DropdownMenuItem onClick={() => refreshScope("selected", selectedIds)}>Refresh selected weather ({selectedIds.length})</DropdownMenuItem>}
-                <DropdownMenuItem onClick={() => refreshScope("filtered", filteredIds)} disabled={!filtered.length}>Refresh filtered weather ({filtered.length})</DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => refreshScope("missing")}>Refresh missing weather</DropdownMenuItem>
-                <DropdownMenuItem onClick={() => refreshScope("all")}>Refresh all spots</DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-          <div className="inline-flex">
-            <Button size="sm" variant="outline" disabled={running} onClick={() => recalculateScores(selectedIds.length ? selectedIds : filteredIds)} className="rounded-r-none">
-              <CheckCircle2 className="mr-2 h-4 w-4" />
-              Recalculate scores
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button size="sm" variant="outline" disabled={running} className="rounded-l-none border-l-0 px-2">
-                  <ChevronDown className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start">
-                <DropdownMenuItem onClick={() => recalculateScores(selectedIds.length ? selectedIds : filteredIds)} disabled={!filtered.length}>Recalculate scores for scope</DropdownMenuItem>
-                <DropdownMenuItem onClick={() => recalculateScores([])}>Recalculate scores for all spots</DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-          <Input type="file" accept=".json,application/json" className="max-w-xs" disabled={importBusy} onChange={e => void onUpload(e.target.files?.[0] ?? null)} />
-        </div>
-        {preview && (
-          <div className="rounded border border-border p-3 text-sm">
-            <div className="mb-2">Preview — New: {preview.summary.newCount}, Update: {preview.summary.updateCount}, Error ID not found: {preview.summary.errorIdNotFoundCount}, Error invalid data: {preview.summary.errorInvalidDataCount}</div>
-            <div className="mb-2 flex flex-wrap gap-2">
-              <Button size="sm" variant="outline" onClick={() => downloadBase64(preview.files.updatesFileName, preview.files.updatesFileBase64)}>{preview.files.updatesFileName}</Button>
-              <Button size="sm" variant="outline" onClick={() => downloadBase64(preview.files.errorsFileName, preview.files.errorsFileBase64)}>{preview.files.errorsFileName}</Button>
-            </div>
+      <AdminDataTable
+        columns={columns}
+        rows={data?.items ?? []}
+        total={data?.total ?? 0}
+        page={state.page}
+        perPage={state.perPage}
+        sortBy={state.sortBy}
+        sortDir={state.sortDir}
+        filters={filters}
+        selectedIds={selectedIds}
+        loading={loading}
+        emptyMessage="No spots found."
+        toolbar={
+          <div>
+            {usage && (
+              <div className="mb-3 rounded-xl border border-card-border bg-background p-3 text-sm text-muted-foreground">
+                Open-Meteo requests this server process: {usage.totalRequests} total, {usage.archiveRequests} archive, {usage.marineRequests} marine, {usage.failedRequests} failed.
+              </div>
+            )}
             <div className="flex flex-wrap gap-2">
-              <Button size="sm" disabled={importBusy} onClick={() => void commitImport("create_update")}>Create new & update existing</Button>
-              <Button size="sm" variant="outline" disabled={importBusy} onClick={() => void commitImport("create_only")}>Create new only</Button>
-              <Button size="sm" variant="ghost" disabled={importBusy} onClick={() => void cancelImport()}>Cancel import</Button>
+              <div className="inline-flex">
+                <Button size="sm" variant="outline" onClick={() => exportRows(exportPrimaryScope)} className="rounded-r-none">
+                  <Download className="mr-2 h-4 w-4" />
+                  {exportPrimaryLabel}
+                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button size="sm" variant="outline" className="rounded-l-none border-l-0 px-2">
+                      <ChevronDown className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    {selectedIds.length > 0 && <DropdownMenuItem onClick={() => exportRows("selected")}>Export selected</DropdownMenuItem>}
+                    {filtersActive && <DropdownMenuItem onClick={() => exportRows("filtered")}>Export filtered</DropdownMenuItem>}
+                    <DropdownMenuItem onClick={() => exportRows("all")}>Export all</DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+              <div className="inline-flex">
+                <Button size="sm" disabled={running} onClick={() => void publishBulk("content-weather")} className="rounded-r-none">
+                  <SendHorizontal className="mr-2 h-4 w-4" />
+                  Publish all
+                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button size="sm" variant="outline" disabled={running} className="rounded-l-none border-l-0 px-2">
+                      <ChevronDown className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    <DropdownMenuItem onClick={() => void publishBulk("content")}>Publish content</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => void publishBulk("weather")}>Publish weather data</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => void publishBulk("content-weather")}>Publish all</DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+              <div className="inline-flex">
+                <Button size="sm" variant="outline" disabled={running} onClick={() => refreshScope(selectedIds.length ? "selected" : "filtered", selectedIds.length ? selectedIds : filteredIds)} className="rounded-r-none">
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Refresh weather
+                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button size="sm" variant="outline" disabled={running} className="rounded-l-none border-l-0 px-2">
+                      <ChevronDown className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    {selectedIds.length > 0 && <DropdownMenuItem onClick={() => refreshScope("selected", selectedIds)}>Refresh selected weather ({selectedIds.length})</DropdownMenuItem>}
+                    <DropdownMenuItem onClick={() => refreshScope("filtered", filteredIds)} disabled={!filteredIds.length}>Refresh filtered weather ({filteredIds.length})</DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={() => refreshScope("missing")}>Refresh missing weather</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => refreshScope("all")}>Refresh all spots</DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+              <div className="inline-flex">
+                <Button size="sm" variant="outline" disabled={running} onClick={() => recalculateScores(selectedIds.length ? selectedIds : filteredIds)} className="rounded-r-none">
+                  <CheckCircle2 className="mr-2 h-4 w-4" />
+                  Recalculate scores
+                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button size="sm" variant="outline" disabled={running} className="rounded-l-none border-l-0 px-2">
+                      <ChevronDown className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    <DropdownMenuItem onClick={() => recalculateScores(selectedIds.length ? selectedIds : filteredIds)} disabled={!filteredIds.length}>Recalculate scores for scope</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => recalculateScores([])}>Recalculate scores for all spots</DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+              <Input type="file" accept=".json,application/json" className="max-w-xs" disabled={importBusy} onChange={e => void onUpload(e.target.files?.[0] ?? null)} />
             </div>
+            {preview && (
+              <div className="mt-3 rounded border border-border p-3 text-sm">
+                <div className="mb-2">Preview — New: {preview.summary.newCount}, Update: {preview.summary.updateCount}, Error ID not found: {preview.summary.errorIdNotFoundCount}, Error invalid data: {preview.summary.errorInvalidDataCount}</div>
+                <div className="mb-2 flex flex-wrap gap-2">
+                  <Button size="sm" variant="outline" onClick={() => downloadBase64(preview.files.updatesFileName, preview.files.updatesFileBase64)}>{preview.files.updatesFileName}</Button>
+                  <Button size="sm" variant="outline" onClick={() => downloadBase64(preview.files.errorsFileName, preview.files.errorsFileBase64)}>{preview.files.errorsFileName}</Button>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" disabled={importBusy} onClick={() => void commitImport("create_update")}>Create new & update existing</Button>
+                  <Button size="sm" variant="outline" disabled={importBusy} onClick={() => void commitImport("create_only")}>Create new only</Button>
+                  <Button size="sm" variant="ghost" disabled={importBusy} onClick={() => void cancelImport()}>Cancel import</Button>
+                </div>
+              </div>
+            )}
           </div>
-        )}
-      </div>
-
-      <div className="relative mb-4">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <Input placeholder="Search spots…" value={q} onChange={e => setQ(e.target.value)} className="pl-9" data-testid="input-search-spots" />
-        <div className="mt-2 flex flex-wrap gap-2">
-          {(["all", "dirty", "missing", "fresh"] as const).map(status => (
-            <Button key={status} variant={view === status ? "default" : "outline"} size="sm" onClick={() => setView(status)} data-testid={`tab-data-${status}`}>
-              {status[0].toUpperCase() + status.slice(1)}
-            </Button>
-          ))}
-          <span className="ml-auto self-center text-sm text-muted-foreground">
-            {selectedIds.length} selected ({selectedVisibleCount} visible)
-          </span>
-        </div>
-      </div>
-
-      {isLoading ? (
-        <div className="space-y-2">{Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-14 w-full rounded-xl" />)}</div>
-      ) : (
-        <div className="overflow-hidden rounded-2xl border border-card-border bg-card">
-          <table className="w-full text-sm">
-            <thead className="bg-secondary/60 text-left text-xs uppercase tracking-wide text-muted-foreground">
-              <tr>
-                <th className="px-2 py-3"><input type="checkbox" checked={allFilteredSelected} onChange={(e) => setSelectedIds(e.target.checked ? Array.from(new Set([...selectedIds, ...filteredIds])) : selectedIds.filter(id => !filteredIds.includes(id)))} /></th>
-                <th className="px-4 py-3 font-medium">
-                  <button type="button" onClick={() => toggleSort("name")} className="inline-flex items-center gap-1">
-                    Name
-                    {sortBy === "name" ? (sortDir === "asc" ? "▲" : "▼") : null}
-                  </button>
-                </th>
-                <th className="px-4 py-3 font-medium">Country</th>
-                <th className="px-4 py-3 font-medium">Content</th>
-                <th className="px-4 py-3 font-medium">Data</th>
-                <th className="px-4 py-3 font-medium">Last refreshed</th>
-                <th className="px-4 py-3 font-medium">
-                  <button type="button" onClick={() => toggleSort("updatedAt")} className="inline-flex items-center gap-1">
-                    Last updated
-                    {sortBy === "updatedAt" ? (sortDir === "asc" ? "▲" : "▼") : null}
-                  </button>
-                </th>
-                <th className="px-4 py-3 font-medium">
-                  <button type="button" onClick={() => toggleSort("publishedAt")} className="inline-flex items-center gap-1">
-                    Last published
-                    {sortBy === "publishedAt" ? (sortDir === "asc" ? "▲" : "▼") : null}
-                  </button>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map(s => (
-                <tr key={s.id} className="cursor-pointer border-t border-border hover-elevate" onClick={() => navigate(`/admin/spots/${s.id}`)} data-testid={`row-admin-spot-${s.slug}`}>
-                  <td className="px-2 py-3" onClick={(e) => e.stopPropagation()}>
-                    <input type="checkbox" checked={selectedIds.includes(s.id)} onChange={(e) => setSelectedIds(prev => e.target.checked ? Array.from(new Set([...prev, s.id])) : prev.filter(id => id !== s.id))} />
-                  </td>
-                  <td className="px-4 py-3 font-medium text-foreground">{s.name}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{countryNameForCode(s.country) || "—"}</td>
-                  <td className="px-4 py-3"><StatusPill published={s.published} hasDraft={s.hasDraft} /></td>
-                  <td className="px-4 py-3"><DataPill status={s.dataStatus as any} /></td>
-                  <td className="px-4 py-3 text-muted-foreground">{s.dataLastRefreshedAt ? new Date(s.dataLastRefreshedAt).toLocaleString() : <span className="inline-flex items-center gap-1"><AlertTriangle className="h-3.5 w-3.5" /> Never</span>}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{s.updatedAt ? new Date(s.updatedAt).toLocaleString() : "—"}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{s.publishedAt ? new Date(s.publishedAt).toLocaleString() : "—"}</td>
-                </tr>
-              ))}
-              {filtered.length === 0 && <tr><td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">No spots found.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      )}
+        }
+        onSortChange={onSortChange}
+        onFilterChange={onFilterChange}
+        onPageChange={(page) => pushState({ ...state, page })}
+        onPerPageChange={(perPage) => pushState({ ...state, perPage, page: 1 })}
+        onSelect={(id, checked) =>
+          setSelectedIds((prev) => {
+            const n = typeof id === "number" ? id : Number(id);
+            return checked ? (prev.includes(n) ? prev : [...prev, n]) : prev.filter((x) => x !== n);
+          })
+        }
+        onSelectAll={(ids) =>
+          setSelectedIds((prev) => {
+            const numeric = ids.map((id) => (typeof id === "number" ? id : Number(id)));
+            const next = new Set(prev);
+            for (const n of numeric) next.add(n);
+            return Array.from(next);
+          })
+        }
+        onRowClick={(s) => navigate(`/admin/spots/${s.id}`)}
+      />
 
       {history.length > 0 && (
         <div className="mt-6 rounded-xl border border-border p-3 text-xs">
