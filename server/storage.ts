@@ -11,6 +11,7 @@ import Database from "better-sqlite3";
 import { eq, and, inArray, isNull } from "drizzle-orm";
 import crypto from "node:crypto";
 import { DEFAULT_SCORING_CONFIG, type ScoringConfig } from "@shared/scoring";
+import { COUNTRY_NAME_TO_CODE } from "@shared/locations";
 
 export const sqlite = new Database("data.db");
 sqlite.pragma("journal_mode = WAL");
@@ -38,6 +39,7 @@ ensureColumns("spots", [
   { name: "weather_has_manual_changes", ddl: "weather_has_manual_changes INTEGER DEFAULT 0" },
   { name: "seo_title_override", ddl: "seo_title_override TEXT DEFAULT ''" },
   { name: "seo_description_override", ddl: "seo_description_override TEXT DEFAULT ''" },
+  { name: "country_manual", ddl: "country_manual INTEGER DEFAULT 0" },
   { name: "deleted_at", ddl: "deleted_at TEXT" },
 ]);
 ensureColumns("monthly_records", [
@@ -570,6 +572,24 @@ function ensureSingleActiveMainAdmin() {
 ensureSingleActiveMainAdmin();
 
 db.update(spots).set({ rankingMode: "auto" } as any).run();
+
+// ── Country code backfill (spec §22.3) ──
+// `spots.country` used to hold English display names ("Greece", "Cape Verde");
+// the canonical form is now an uppercase ISO-2 code ("GR", "CV"). Convert any
+// remaining legacy names on every startup — cheap, idempotent, and also repairs
+// English names that arrive via Excel import files. Known codes are excluded so
+// already-converted rows are never touched.
+{
+  const codes = new Set(Object.values(COUNTRY_NAME_TO_CODE));
+  const codeList = Array.from(codes);
+  const placeholders = codeList.map(() => "?").join(", ");
+  const stmt = sqlite.prepare(
+    `UPDATE spots SET country = ? WHERE country COLLATE NOCASE = ? AND country NOT IN (${placeholders})`,
+  );
+  for (const nameKey of Object.keys(COUNTRY_NAME_TO_CODE)) {
+    stmt.run(COUNTRY_NAME_TO_CODE[nameKey], nameKey, ...codeList);
+  }
+}
 
 // Fields excluded when taking a "published snapshot" of an entity's content.
 function snapshotSpot(s: Spot) {

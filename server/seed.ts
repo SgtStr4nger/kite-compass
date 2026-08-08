@@ -8,6 +8,7 @@
  */
 import { db } from "./storage";
 import { spots, monthlyRecords, filterDefs, schools, stays } from "@shared/schema";
+import { countryCodeForName } from "@shared/locations";
 import { eq } from "drizzle-orm";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -42,7 +43,7 @@ async function run() {
   for (const s of data.spots) {
     const row = {
       publicId: s.public_id || crypto.randomUUID(),
-      slug: s.slug, name: s.name, country: s.country || "", region: s.region || "",
+      slug: s.slug, name: s.name, country: (countryCodeForName(s.country) ?? s.country) || "", region: s.region || "",
       latitude: s.latitude, longitude: s.longitude,
       googleMapsUrl: s.google_maps_url || "", windyUrl: "", windfinderUrl: "",
       destinationSummary: s.destination_summary || "",

@@ -50,6 +50,16 @@ export function SiteFooter() {
         </div>
         <div className="mt-10 border-t border-primary-foreground/15 pt-6 text-xs text-primary-foreground/50">
           © {new Date().getFullYear()} Kite Compass. Wind and season data is indicative — always check live forecasts before you travel.
+          <span className="mx-2">·</span>
+          <a
+            href="https://www.openstreetmap.org/copyright"
+            target="_blank"
+            rel="noreferrer"
+            className="text-primary-foreground/85 no-underline hover:text-accent"
+            data-testid="link-footer-osm"
+          >
+            © OpenStreetMap contributors
+          </a>
         </div>
       </div>
     </footer>

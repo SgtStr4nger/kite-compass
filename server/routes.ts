@@ -8,7 +8,8 @@ import { db, storage, sqlite, logError } from "./storage";
 import { log } from "./log";
 import type { ListingsFilter, SeoContent, TrashCategory, RedirectRow, AdminErrorStatus } from "./storage";
 import { enrichSpotById, MissingCoordinatesError } from "./services/enrichment";
-import { getContinentForCountry } from "@shared/locations";
+import { reverseGeocodeCountry } from "./services/reverseGeocode";
+import { getContinentForCountry, countryNameForCode, normalizeCountryCode } from "@shared/locations";
 import { bestEvaluableScore, calculateAutoMonthlyScore, DEFAULT_SCORING_CONFIG, deriveSeasonLabelFromScore, resolveMonthlyScore, scoringConfigSchema, type ScoringConfig } from "@shared/scoring";
 import { insertSpotSchema, insertMonthlySchema, monthlyRecords, schools, spots, stays, spotSchools, spotStays } from "@shared/schema";
 import type { Spot, MonthlyRecord, InsertMonthly, InsertSchool, InsertStay } from "@shared/schema";
@@ -871,6 +872,41 @@ type LegalSlug = keyof typeof LEGAL_PAGE_META;
 // Fields whose change makes weather data outdated (spec §20.2).
 const WEATHER_COORD_FIELDS = new Set(["latitude", "longitude"]);
 
+/**
+ * Reverse-geocode a coordinate pair into an uppercase ISO-2 country code.
+ * Wraps the Nominatim service so failures never throw into the route: upstream
+ * errors and "no country here" both return null, leaving the field for manual
+ * entry (draft saves are never blocked — only publishing is, per spec §22.3).
+ */
+async function autoResolveCountry(lat: number, lng: number): Promise<{ country: string } | null> {
+  try {
+    const resolved = await reverseGeocodeCountry(lat, lng);
+    return resolved ? { country: resolved.code } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** True when either coordinate value changed (6-decimal tolerance). */
+function coordsChanged(
+  prevLat: number | null | undefined,
+  prevLng: number | null | undefined,
+  nextLat: number | null | undefined,
+  nextLng: number | null | undefined,
+): boolean {
+  const fmt = (v: number | null | undefined) =>
+    v == null || !Number.isFinite(v) ? "" : String(Number(v.toFixed(6)));
+  return fmt(prevLat) !== fmt(nextLat) || fmt(prevLng) !== fmt(nextLng);
+}
+
+/** Human message when a spot has no country and publishing is attempted. */
+function publishCountryError(spot: { country?: string | null }): string | null {
+  if (!spot.country) {
+    return "Country is required for publishing (reverse geocoding failed — set it manually).";
+  }
+  return null;
+}
+
 function parseIsoMs(value: string | null | undefined): number | null {
   if (!value) return null;
   const ms = new Date(value).getTime();
@@ -1687,7 +1723,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       let list = (await storage.listSpots(false)).map(s => serializeSpot(s, true));
       if (filters.q) {
         const q = filters.q.toLowerCase();
-        list = list.filter(s => s.name.toLowerCase().includes(q) || (s.country || "").toLowerCase().includes(q));
+        list = list.filter(s => s.name.toLowerCase().includes(q) || (s.country || "").toLowerCase().includes(q) || countryNameForCode(s.country).toLowerCase().includes(q));
       }
       if (spotScope === "selected") list = list.filter(s => selectedIds.includes(s.id));
       const items = list.map((s) => ({
@@ -2188,7 +2224,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const seasonByMonth = MONTH_ORDER.map(mn => bySeason.get(mn) ?? null);
       const publicRec = rec ? publicMonthly.find(m => m.month === rec.month) : null;
       const monthRecord = rec ? { ...rec, seasonLabel: publicRec?.seasonLabel ?? deriveSeasonLabelFromScore(monthlyScoreForSpot(rec, rankingMode), bestScore, seasonConfig) } : null;
-      const searchHaystack = [s.name, s.country, s.region, s.slug, s.destinationSummary, s.teaserText]
+      const searchHaystack = [s.name, s.country, countryNameForCode(s.country), s.region, s.slug, s.destinationSummary, s.teaserText]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
@@ -2330,13 +2366,56 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/admin/spots", requireAuth, async (req, res) => {
     const parsed = insertSpotSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues });
-    const created = await storage.createSpot(normalizeSpotInput(parsed.data) as any);
+    const data = parsed.data as any;
+    // Auto-resolve the country from coordinates unless the admin set it manually.
+    const coordsOk = Number.isFinite(data.latitude) && Number.isFinite(data.longitude);
+    if (coordsOk && data.countryManual !== true) {
+      const resolved = await autoResolveCountry(data.latitude, data.longitude);
+      if (resolved) data.country = resolved.country;
+    }
+    const created = await storage.createSpot(normalizeSpotInput(data) as any);
     res.json(serializeSpot(created));
   });
 
   app.patch("/api/admin/spots/:id", requireAuth, async (req, res) => {
     const id = Number(req.params.id);
     const body = normalizeSpotInput(req.body);
+    const stored = await storage.getSpot(id);
+    if (!stored) return res.status(404).json({ error: "not found" });
+
+    // Coerce the manual flag to a real boolean only when the client sent it;
+    // a partial PATCH must never silently clear the flag.
+    const manualFlag = body.countryManual !== undefined ? !!body.countryManual : !!(stored as any).countryManual;
+    body.countryManual = manualFlag;
+
+    const nextLat = Number.isFinite(body.latitude) ? body.latitude : stored.latitude;
+    const nextLng = Number.isFinite(body.longitude) ? body.longitude : stored.longitude;
+    const coordsOk = Number.isFinite(nextLat) && Number.isFinite(nextLng);
+
+    // Auto-detection runs only while the country is NOT a manual override. A
+    // manual override (incl. an explicitly emptied field) is respected as-is —
+    // publishing then requires the admin to fill it or hit "Reset to automatic".
+    if (!manualFlag && coordsOk) {
+      const resetFromManual = !!(stored as any).countryManual;
+      const bodyHasCoords = body.latitude !== undefined || body.longitude !== undefined;
+      const coordsTouched = bodyHasCoords && coordsChanged(stored.latitude, stored.longitude, body.latitude, body.longitude);
+      const countryEmpty = !stored.country || !String(body.country ?? "").trim();
+      if (resetFromManual || coordsTouched || countryEmpty) {
+        const resolved = await autoResolveCountry(nextLat, nextLng);
+        if (resolved) {
+          body.country = resolved.country;
+          // We just auto-derived it, so clear any stale manual flag.
+          body.countryManual = false;
+        }
+      }
+    }
+    // Manual entry (lenient): normalize a name/code to ISO-2 when possible,
+    // otherwise store the raw value as-is — never blocks saving or publishing.
+    if (manualFlag && body.country !== undefined) {
+      const normalized = normalizeCountryCode(body.country);
+      if (normalized) body.country = normalized;
+    }
+
     // If any weather-coord-relevant fields are changing, record that timestamp
     // so weatherStatus can show "Outdated" until data is refreshed.
     const touchesWeatherCoords = WEATHER_COORD_FIELDS.size > 0 &&
@@ -2349,8 +2428,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(serializeSpot(updated));
   });
 
+  // Live reverse geocoding for the admin editor: resolve a country from
+  // coordinates on demand (used to update the country field as coords change).
+  // Returns { code, name } on success and { code: null } when nothing resolves
+  // or the upstream call fails — the client leaves the field for manual entry.
+  app.get("/api/admin/geocode", requireAuth, async (req, res) => {
+    const lat = Number(req.query.lat);
+    const lng = Number(req.query.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return res.status(400).json({ error: "lat and lng required" });
+    }
+    try {
+      const result = await reverseGeocodeCountry(lat, lng);
+      res.json(result ? { code: result.code, name: result.name } : { code: null, name: "" });
+    } catch {
+      res.json({ code: null, name: "" });
+    }
+  });
+
   app.post("/api/admin/spots/:id/publish", requireAuth, async (req, res) => {
-    const s = await storage.publishSpot(Number(req.params.id));
+    const spotId = Number(req.params.id);
+    const spot = await storage.getSpot(spotId);
+    if (!spot) return res.status(404).json({ error: "not found" });
+    const countryErr = publishCountryError(spot);
+    if (countryErr) return res.status(422).json({ error: countryErr });
+    const s = await storage.publishSpot(spotId);
     if (!s) return res.status(404).json({ error: "not found" });
     clearSitemapCache();
     res.json(serializeSpot(s));
@@ -2373,6 +2475,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const spotId = Number(req.params.id);
     const spot = await storage.getSpot(spotId);
     if (!spot) return res.status(404).json({ error: "not found" });
+    const countryErr = publishCountryError(spot);
+    if (countryErr) return res.status(422).json({ error: countryErr });
     const publishedSpot = await storage.publishSpot(spotId);
     const scoring = await storage.getScoringContent();
     const recalculatedRows = await recalculateScoresForSpotIds(scoring.published, [spotId], "spots recalculated");
@@ -2393,9 +2497,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     let contentPublished = 0;
     let weatherPublished = 0;
     let recalculatedRows = 0;
+    const skippedMissingCountry: string[] = [];
 
     if (mode === "content" || mode === "content-weather") {
       for (const spot of targetSpots) {
+        // Country is required to publish content (spec §22.3). Skip + report
+        // missing ones without aborting the batch.
+        if (!spot.country) { skippedMissingCountry.push(spot.slug); continue; }
         const out = await storage.publishSpot(spot.id);
         if (out) contentPublished++;
       }
@@ -2416,6 +2524,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       contentPublished,
       weatherPublished,
       recalculatedRows,
+      skippedMissingCountry,
     });
   });
 

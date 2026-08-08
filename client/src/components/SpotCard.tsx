@@ -1,6 +1,7 @@
 import { Link } from "wouter";
 import { SpotListItem, MONTHS, SEASON_META } from "@/lib/types";
 import { ScoreBadge } from "./Badges";
+import { countryNameForCode } from "@shared/locations";
 import { Wind, Gauge, CalendarDays, MapPin } from "lucide-react";
 import placeholderSpot from "@/assets/placeholder-spot.jpg";
 
@@ -73,7 +74,7 @@ export function SpotCard({
               <div className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
                 <MapPin className="h-3 w-3 shrink-0" />
                 <span className="truncate">
-                  {[spot.region, spot.country].filter(Boolean).join(", ") || "—"}
+                  {[spot.region, countryNameForCode(spot.country)].filter(Boolean).join(", ") || "—"}
                 </span>
               </div>
             </div>

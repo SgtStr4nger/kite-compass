@@ -15,6 +15,7 @@ import { getHashSearch } from "@/lib/filterParams";
 import { Wind, Gauge, CalendarDays, MapPin, Plane, ExternalLink, ArrowLeft, Navigation, Waves } from "lucide-react";
 import placeholderSpot from "@/assets/placeholder-spot.jpg";
 import { resolveMonthlyScore } from "@shared/scoring";
+import { countryNameForCode } from "@shared/locations";
 import { applyPageMetadata } from "@/lib/metadata";
 
 const PLACEHOLDER = placeholderSpot;
@@ -43,7 +44,7 @@ export default function SpotDetail() {
       }
       return;
     }
-    const country = spot.country || "Unknown location";
+    const country = countryNameForCode(spot.country) || "Unknown location";
     const autoTitle = `${spot.name}, ${country} – Kitesurfing Guide | Kite Compass`;
     const autoDescription = `Explore kitesurfing conditions, seasonality and travel information for ${spot.name}, ${country}.`;
     const title = spot.seoTitleOverride?.trim() ? spot.seoTitleOverride.trim() : autoTitle;
@@ -113,7 +114,7 @@ export default function SpotDetail() {
                 <h1 className="font-serif text-4xl font-semibold text-white md:text-5xl" data-testid="text-spot-name">{spot.name}</h1>
                 <div className="mt-2 flex items-center gap-1.5 text-white/85">
                   <MapPin className="h-4 w-4" />
-                  {[spot.region, spot.country].filter(Boolean).join(", ") || "—"}
+                  {[spot.region, countryNameForCode(spot.country)].filter(Boolean).join(", ") || "—"}
                 </div>
               </div>
               {activeScore != null && activeRec && (

@@ -217,6 +217,8 @@ export interface Spot {
   seoTitleOverride: string;
   seoDescriptionOverride: string;
   rankingMode: string; // manual|auto
+  /** true when the country was set manually (auto-derived from coords otherwise) */
+  countryManual?: boolean;
   createdAt?: string;
   updatedAt?: string;
   dataStatus?: "fresh" | "dirty" | "missing";
