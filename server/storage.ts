@@ -41,6 +41,7 @@ ensureColumns("spots", [
   { name: "seo_description_override", ddl: "seo_description_override TEXT DEFAULT ''" },
   { name: "country_manual", ddl: "country_manual INTEGER DEFAULT 0" },
   { name: "deleted_at", ddl: "deleted_at TEXT" },
+  { name: "published_at", ddl: "published_at TEXT" },
 ]);
 ensureColumns("monthly_records", [
   { name: "avg_kiteable_wind_10m_knots", ddl: "avg_kiteable_wind_10m_knots REAL" },
@@ -987,7 +988,7 @@ export class DatabaseStorage implements IStorage {
     const s = await this.getSpot(id);
     if (!s) return undefined;
     return db.update(spots).set({
-      published: true, hasDraft: false, publishedSnapshot: snapshotSpot(s), updatedAt: now(),
+      published: true, hasDraft: false, publishedSnapshot: snapshotSpot(s), publishedAt: now(), updatedAt: now(),
     } as any).where(eq(spots.id, id)).returning().get();
   }
   async deleteSpot(id: number) {

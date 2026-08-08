@@ -173,7 +173,7 @@ export default function AdminScoring() {
     }
   };
 
-  const dismiss = () => navigate("/admin/data");
+  const dismiss = () => navigate("/admin/spots");
 
   return (
     <AdminLayout>
@@ -181,7 +181,7 @@ export default function AdminScoring() {
         <div>
           <div className="mb-2 inline-flex items-center gap-2 text-sm text-muted-foreground">
             <button type="button" className="inline-flex items-center gap-1 hover:text-foreground" onClick={dismiss}>
-              <ArrowLeft className="h-4 w-4" /> Data
+              <ArrowLeft className="h-4 w-4" /> Spots
             </button>
             <span>/</span>
             <span>Configure scoring</span>
