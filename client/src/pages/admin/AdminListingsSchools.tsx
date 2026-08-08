@@ -9,6 +9,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { useToast } from "@/hooks/use-toast";
 import { useCrossPageSelection } from "@/hooks/useCrossPageSelection";
 import AdminDataTable from "@/components/admin/AdminDataTable";
+import ImportButton from "@/components/admin/ImportButton";
 import {
   School,
   ListingsPage,
@@ -512,7 +513,7 @@ export default function AdminListingsSchools() {
               <Button size="sm" variant="outline" disabled={!selectedIds.length} onClick={() => void exportRows("selected")}>Export selected</Button>
               <Button size="sm" variant="outline" onClick={() => void exportRows("filtered")}>Export filtered</Button>
               <Button size="sm" variant="outline" onClick={() => void exportRows("all")}>Export all</Button>
-              <Input type="file" accept=".json" className="max-w-xs" disabled={importBusy} onChange={(e) => void onUpload(e.target.files?.[0] ?? null)} />
+              <ImportButton accept=".json" disabled={importBusy} onFile={(f) => void onUpload(f)} />
             </div>
             {preview && (
               <div className="mt-3 rounded border p-3 text-sm">

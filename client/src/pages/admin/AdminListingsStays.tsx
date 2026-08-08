@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Stay, ListingsPage, STAY_TYPES, ExcelImportAction, ExcelImportHistoryItem, ExcelImportPreviewResponse, AdminTableColumn, ColumnFilterValue, AdminFilterOption } from "@/lib/types";
 import AdminDataTable from "@/components/admin/AdminDataTable";
+import ImportButton from "@/components/admin/ImportButton";
 import { Plus, Check, X, Globe, Map, Trash2, SendHorizontal, ChevronDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useCrossPageSelection } from "@/hooks/useCrossPageSelection";
@@ -458,7 +459,7 @@ export default function AdminListingsStays() {
               <Button size="sm" variant="outline" disabled={!selectedIds.length} onClick={() => void exportRows("selected")}>Export selected</Button>
               <Button size="sm" variant="outline" onClick={() => void exportRows("filtered")}>Export filtered</Button>
               <Button size="sm" variant="outline" onClick={() => void exportRows("all")}>Export all</Button>
-              <Input type="file" accept=".json" className="max-w-xs" disabled={importBusy} onChange={(e) => void onUpload(e.target.files?.[0] ?? null)} />
+              <ImportButton accept=".json" disabled={importBusy} onFile={(f) => void onUpload(f)} />
             </div>
             {preview && (
               <div className="mt-3 rounded border p-3 text-sm">
