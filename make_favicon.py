@@ -26,14 +26,16 @@ def compass(s, opaque=False):
 out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "client", "public")
 os.makedirs(out, exist_ok=True)
 
-# Primary browser favicon (128x128, transparent background).
-compass(128, opaque=False).save(os.path.join(out, "favicon.png"))
-# Reference brand icons for the web app manifest (192 and 512, transparent bg).
-compass(192, opaque=False).save(os.path.join(out, "icon-192.png"))
-compass(512, opaque=False).save(os.path.join(out, "icon-512.png"))
+# Primary browser favicon (128x128). Opaque cream background so browsers
+# never paint transparency as a light chip in dark mode (white rectangle artifact).
+compass(128, opaque=True).save(os.path.join(out, "favicon.png"))
+# Reference brand icons for the web app manifest (192 and 512), opaque cream bg.
+compass(192, opaque=True).save(os.path.join(out, "icon-192.png"))
+compass(512, opaque=True).save(os.path.join(out, "icon-512.png"))
 # iOS home-screen icon (180x180) - opaque cream background (no transparency).
 compass(180, opaque=True).save(os.path.join(out, "apple-touch-icon.png"))
 # Multi-size ICO for legacy browsers (16/32/48), generated from the 48x48 master.
 master = compass(48, opaque=True).convert("RGB")
 master.save(os.path.join(out, "favicon.ico"), format="ICO", sizes=[(16, 16), (32, 32), (48, 48)])
 print("icons written to", out)
+
