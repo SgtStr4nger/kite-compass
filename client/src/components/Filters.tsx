@@ -17,7 +17,6 @@ export interface FilterState {
   spotType: string[];
   riderLevel: string[];
   vibe: string[];
-  windType: string[];
   windMin: number | null;
   windMax: number | null;
 }
@@ -30,19 +29,17 @@ export const emptyFilters: FilterState = {
   spotType: [],
   riderLevel: [],
   vibe: [],
-  windType: [],
   windMin: null,
   windMax: null,
 };
 
 const KEY_MAP = {
-  windTypes: "windType",
   riderLevels: "riderLevel",
   spotTypes: "spotType",
   vibeTags: "vibe",
-} satisfies Record<string, "windType" | "riderLevel" | "spotType" | "vibe">;
+} satisfies Record<string, "riderLevel" | "spotType" | "vibe">;
 
-const FILTER_ORDER = ["windTypes", "riderLevels", "spotTypes", "vibeTags"] as const;
+const FILTER_ORDER = ["riderLevels", "spotTypes", "vibeTags"] as const;
 
 const FILTER_LABELS: Partial<Record<(typeof FILTER_ORDER)[number], string>> = {
   spotTypes: "Spot type",
@@ -50,7 +47,6 @@ const FILTER_LABELS: Partial<Record<(typeof FILTER_ORDER)[number], string>> = {
 };
 
 const PUBLIC_FILTER_FALLBACKS: FilterDef[] = [
-  { id: -1, key: "windTypes", label: "Wind type", field: "primary_wind_type", type: "multiselect", options: ["Onshore", "Side-on", "Side-shore", "Side-off", "Offshore"], isPublic: true, sortOrder: 5 },
   { id: -2, key: "riderLevels", label: "Rider level", field: "rider_levels", type: "multiselect", options: ["beginner", "intermediate", "advanced"], isPublic: true, sortOrder: 2 },
   { id: -4, key: "spotTypes", label: "Spot type", field: "spot_types", type: "multiselect", options: ["flat-water", "chop", "waves", "lagoon", "foil", "freestyle"], isPublic: true, sortOrder: 1 },
   { id: -5, key: "vibeTags", label: "Travel vibe", field: "vibe_tags", type: "multiselect", options: ["city", "town", "village", "remote", "touristy", "local-scene", "family-friendly", "nightlife"], isPublic: true, sortOrder: 3 },
@@ -67,7 +63,6 @@ export function normalizeFilterState(value: Partial<FilterState> | null | undefi
     spotType: value?.spotType ?? [],
     riderLevel: value?.riderLevel ?? [],
     vibe: value?.vibe ?? [],
-    windType: value?.windType ?? [],
     windMin: value?.windMin ?? null,
     windMax: value?.windMax ?? null,
   };

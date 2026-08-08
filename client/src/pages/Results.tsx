@@ -115,7 +115,6 @@ export default function Results() {
     filters.spotType.length +
     filters.riderLevel.length +
     filters.vibe.length +
-    filters.windType.length +
     (filters.windMin != null || filters.windMax != null ? 1 : 0);
 
   const count = spots?.length ?? 0;
