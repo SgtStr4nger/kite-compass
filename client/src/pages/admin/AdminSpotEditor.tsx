@@ -16,7 +16,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { useToast } from "@/hooks/use-toast";
 import { SpotDetail, MonthlyRecord, MONTHS, tagLabel, School, Stay, SCHOOL_SPORTS, STAY_TYPES } from "@/lib/types";
 import { countryNameForCode } from "@shared/locations";
-import { ArrowLeft, Eye, Save, Trash2, Upload, Plus, CloudDownload, RefreshCw, CheckCircle2, AlertTriangle, CheckCheck, ChevronUp, ChevronDown, Link as LinkIcon } from "lucide-react";
+import { ArrowLeft, Eye, Save, Trash2, Upload, Plus, CloudDownload, RefreshCw, CheckCircle2, AlertTriangle, CheckCheck, ChevronUp, ChevronDown, Link as LinkIcon, Sparkles } from "lucide-react";
 
 const SPOT_TYPES = ["flat-water", "chop", "waves", "lagoon", "foil", "freestyle"];
 const RIDER_LEVELS = ["beginner", "intermediate", "advanced"];
@@ -84,6 +84,18 @@ export default function AdminSpotEditor() {
     }
   }, [loaded]);
 
+  // When an AI enrichment job completes, refetch this spot so the freshly-written
+  // drafts appear in the open editor without a manual page refresh.
+  useEffect(() => {
+    if (!token || !id) return;
+    const onDone = () => {
+      void queryClient.invalidateQueries({ queryKey: [`/api/admin/spots/${id}`] });
+      void queryClient.invalidateQueries({ queryKey: ["/api/admin/spots"] });
+    };
+    window.addEventListener("ai-enrich-done", onDone);
+    return () => window.removeEventListener("ai-enrich-done", onDone);
+  }, [token, id]);
+
   const set = (k: keyof SpotForm, v: any) => setForm(f => ({ ...f, [k]: v }));
   const toggleArr = (k: "spotTypes" | "riderLevels" | "vibeTags", v: string) =>
     setForm(f => {
@@ -145,6 +157,49 @@ export default function AdminSpotEditor() {
     const { monthly: m, schools: sc, stays: st, ...rest } = fresh;
     setForm(rest); setMonthly(m); setSchools(sc ?? []); setStays(st ?? []);
     toast({ title: `Spot content + weather published (${out.publishedCount} monthly rows)` });
+  };
+
+  const enrichSpot = async () => {
+    if (!savedId) return;
+    setBusy(true);
+    try {
+      const out = await api<{ accepted: boolean; spots: number; skipped: number; error?: string }>(
+        "POST",
+        "/api/admin/ai/enrich",
+        { spotIds: [savedId] },
+      );
+      if (out.accepted) {
+        toast({
+          title: "AI enrichment started",
+          description: `${out.spots} spot(s) queued (${out.skipped} already complete)`,
+        });
+        // Trigger the admin layout to poll the status immediately so the banner appears right away.
+        window.dispatchEvent(new CustomEvent("ai-enrich-refresh"));
+        // Poll until the job is terminal, then refetch this spot so the newly written
+        // drafts appear in the open editor without a manual refresh.
+        const spotId = savedId;
+        const deadline = Date.now() + 120_000;
+        const tick = async (): Promise<void> => {
+          if (Date.now() > deadline) return;
+          try {
+            const status = await api<{ active: boolean }>("GET", "/api/admin/ai/enrich/status");
+            if (status.active) {
+              setTimeout(() => { void tick(); }, 2000);
+              return;
+            }
+          } catch { /* transient — keep polling */ }
+          await queryClient.invalidateQueries({ queryKey: [`/api/admin/spots/${spotId}`] });
+          await queryClient.invalidateQueries({ queryKey: ["/api/admin/spots"] });
+        };
+        setTimeout(() => { void tick(); }, 2500);
+      } else {
+        toast({ title: "AI enrichment", description: out.error || "No eligible empty fields." });
+      }
+    } catch (e: any) {
+      toast({ title: "AI enrichment failed", description: String(e.message || e), variant: "destructive" });
+    } finally {
+      setBusy(false);
+    }
   };
 
   const deleteSpot = async () => {
@@ -332,6 +387,7 @@ export default function AdminSpotEditor() {
           )}
           <Button variant="outline" onClick={exportSpot} disabled={busy} className="gap-2" data-testid="button-export-spot"><Upload className="h-4 w-4" /> Export</Button>
           <Button variant="outline" onClick={preview} disabled={busy || !form.name} className="gap-2" data-testid="button-preview"><Eye className="h-4 w-4" /> Preview</Button>
+          <Button variant="outline" onClick={() => void enrichSpot()} disabled={busy || !savedId} className="gap-2" data-testid="button-enrich-spot-ai"><Sparkles className="h-4 w-4" /> Enrich with AI</Button>
           <Button variant="outline" onClick={saveSpot} disabled={busy} className="gap-2" data-testid="button-save-draft"><Save className="h-4 w-4" /> Save draft</Button>
           <div className="inline-flex">
             <Button onClick={publishSpot} disabled={busy || !form.country} className="rounded-r-none" data-testid="button-publish-spot-content">Publish content</Button>

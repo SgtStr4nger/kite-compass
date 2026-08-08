@@ -174,6 +174,38 @@ export interface WeatherRefreshStatus {
   visible: boolean;
 }
 
+export interface AiSettings {
+  apiKeySet: boolean;
+  apiKeyHint: string | null;
+  model: string;
+  baseUrl: string;
+  prompts: Record<string, string>;
+  updatedAt: string | null;
+}
+
+export interface AiEnrichLogEntry {
+  id: number;
+  spotId: number | null;
+  spotName: string;
+  status: "success" | "failed" | "skipped";
+  writtenFields: string[];
+  skippedFields: string[];
+  error: string | null;
+  createdAt: string | null;
+}
+
+export interface AiEnrichStatus {
+  status: "Idle" | "Enriching spots with AI" | "AI enrichment completed" | "AI enrichment failed";
+  totalSpots: number;
+  completedSpots: number;
+  message: string;
+  dismissible: boolean;
+  dismissed: boolean;
+  updatedAt: string | null;
+  active: boolean;
+  visible: boolean;
+}
+
 export interface OpenMeteoWindowUsage {
   used: number;
   limit: number;

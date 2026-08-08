@@ -1,4 +1,4 @@
-import { users, spots, monthlyRecords, filterDefs, schools, stays, sitePages, legalPages, seoSettings, scoringSettings, scoringRecalcState, weatherRefreshState, spotSchools, spotStays } from '@shared/schema';
+import { users, spots, monthlyRecords, filterDefs, schools, stays, sitePages, legalPages, seoSettings, scoringSettings, scoringRecalcState, weatherRefreshState, aiSettings, aiEnrichState, aiEnrichLog, spotSchools, spotStays } from '@shared/schema';
 import type {
   User, InsertUser, Spot, InsertSpot, MonthlyRecord, InsertMonthly,
   School, InsertSchool, Stay, InsertStay,
@@ -281,6 +281,34 @@ sqlite.exec(`
     dismissed INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT
   );
+  CREATE TABLE IF NOT EXISTS ai_settings (
+    id INTEGER PRIMARY KEY CHECK(id = 1),
+    api_key TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT 'deepseek-v4-flash',
+    base_url TEXT NOT NULL DEFAULT 'https://api.deepseek.com',
+    prompts_json TEXT NOT NULL DEFAULT '{}',
+    updated_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS ai_enrich_state (
+    id INTEGER PRIMARY KEY CHECK(id = 1),
+    status TEXT NOT NULL DEFAULT 'Idle',
+    total_spots INTEGER NOT NULL DEFAULT 0,
+    completed_spots INTEGER NOT NULL DEFAULT 0,
+    message TEXT NOT NULL DEFAULT '',
+    dismissible INTEGER NOT NULL DEFAULT 0,
+    dismissed INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS ai_enrich_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    spot_id INTEGER,
+    spot_name TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'success',
+    written_fields TEXT,
+    skipped_fields TEXT,
+    error TEXT,
+    created_at TEXT
+  );
   CREATE TABLE IF NOT EXISTS redirects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     from_path TEXT NOT NULL UNIQUE,
@@ -382,6 +410,9 @@ ensureColumns("seo_settings", [
   { name: "methodology_description_published", ddl: "methodology_description_published TEXT NOT NULL DEFAULT ''" },
   { name: "has_draft", ddl: "has_draft INTEGER DEFAULT 1" },
   { name: "published_at", ddl: "published_at TEXT" },
+]);
+ensureColumns("ai_settings", [
+  { name: "prompts_json", ddl: "prompts_json TEXT NOT NULL DEFAULT '{}'" },
 ]);
 
 const defaultImpressumBody = [
@@ -537,6 +568,34 @@ function ensureDefaultScoringSettings() {
   }
 }
 ensureDefaultScoringSettings();
+
+function ensureDefaultAiSettings() {
+  const timestamp = now();
+  const settingsRow = db.select().from(aiSettings).get();
+  if (!settingsRow) {
+    db.insert(aiSettings).values({
+      id: 1,
+      apiKey: "",
+      model: "deepseek-v4-flash",
+      baseUrl: "https://api.deepseek.com",
+      updatedAt: timestamp,
+    } as any).run();
+  }
+  const stateRow = db.select().from(aiEnrichState).get();
+  if (!stateRow) {
+    db.insert(aiEnrichState).values({
+      id: 1,
+      status: "Idle",
+      totalSpots: 0,
+      completedSpots: 0,
+      message: "",
+      dismissible: false,
+      dismissed: false,
+      updatedAt: timestamp,
+    } as any).run();
+  }
+}
+ensureDefaultAiSettings();
 
 function ensureSpotPublicIds() {
   const rows = db.select({ id: spots.id, publicId: spots.publicId }).from(spots).all();
@@ -733,6 +792,39 @@ export interface WeatherRefreshStatus {
   visible: boolean;
 }
 
+/** Server-side AI provider settings (full API key — never exposed to the client). */
+export interface AiSettingsContent {
+  apiKey: string;
+  model: string;
+  baseUrl: string;
+  /** Custom per-field prompt overrides (JSON object keyed by fillable field name). */
+  prompts: Record<string, string>;
+  updatedAt: string | null;
+}
+
+export interface AiEnrichLogEntry {
+  id: number;
+  spotId: number | null;
+  spotName: string;
+  status: "success" | "failed" | "skipped";
+  writtenFields: string[];
+  skippedFields: string[];
+  error: string | null;
+  createdAt: string | null;
+}
+
+export interface AiEnrichStatus {
+  status: "Idle" | "Enriching spots with AI" | "AI enrichment completed" | "AI enrichment failed";
+  totalSpots: number;
+  completedSpots: number;
+  message: string;
+  dismissible: boolean;
+  dismissed: boolean;
+  updatedAt: string | null;
+  active: boolean;
+  visible: boolean;
+}
+
 export type AdminRole = "main" | "standard";
 export interface CreateAdminUserInput {
   email: string;
@@ -891,6 +983,14 @@ export interface IStorage {
   getWeatherRefreshStatus(): Promise<WeatherRefreshStatus>;
   setWeatherRefreshStatus(next: Partial<Omit<WeatherRefreshStatus, "active" | "visible">> & { status: WeatherRefreshStatus["status"] }): Promise<WeatherRefreshStatus>;
   dismissWeatherRefreshStatus(): Promise<WeatherRefreshStatus>;
+  // AI enrichment settings + job state (spec #74)
+  getAiSettings(): Promise<AiSettingsContent>;
+  saveAiSettings(patch: { apiKey?: string; model?: string; baseUrl?: string; prompts?: Record<string, string> }): Promise<AiSettingsContent>;
+  getAiEnrichStatus(): Promise<AiEnrichStatus>;
+  setAiEnrichStatus(next: Partial<Omit<AiEnrichStatus, "active" | "visible">> & { status: AiEnrichStatus["status"] }): Promise<AiEnrichStatus>;
+  dismissAiEnrichStatus(): Promise<AiEnrichStatus>;
+  logAiEnrichCall(entry: { spotId?: number | null; spotName?: string; status: "success" | "failed" | "skipped"; writtenFields?: string[]; skippedFields?: string[]; error?: string | null }): Promise<AiEnrichLogEntry>;
+  listAiEnrichLog(limit?: number): Promise<AiEnrichLogEntry[]>;
   // trash (soft delete)
   listTrash(): Promise<TrashItem[]>;
   getRestoreInfo(category: TrashCategory, id: number): Promise<RestoreInfo | undefined>;
@@ -1586,6 +1686,131 @@ export class DatabaseStorage implements IStorage {
     if (!row) throw new Error("weather refresh state not initialized");
     db.update(weatherRefreshState).set({ dismissed: true, updatedAt: now() } as any).where(eq(weatherRefreshState.id, row.id)).run();
     return this.getWeatherRefreshStatus();
+  }
+
+  async getAiSettings(): Promise<AiSettingsContent> {
+    const row = db.select().from(aiSettings).get();
+    if (!row) throw new Error("ai settings not initialized");
+    let prompts: Record<string, string> = {};
+    try {
+      const parsed = JSON.parse(row.promptsJson ?? "{}");
+      if (parsed && typeof parsed === "object") prompts = parsed;
+    } catch { prompts = {}; }
+    return {
+      apiKey: row.apiKey ?? "",
+      model: row.model ?? "deepseek-v4-flash",
+      baseUrl: row.baseUrl ?? "https://api.deepseek.com",
+      prompts,
+      updatedAt: row.updatedAt ?? null,
+    };
+  }
+
+  async saveAiSettings(patch: { apiKey?: string; model?: string; baseUrl?: string; prompts?: Record<string, string> }): Promise<AiSettingsContent> {
+    const row = db.select().from(aiSettings).get();
+    if (!row) throw new Error("ai settings not initialized");
+    const updated = db.update(aiSettings).set({
+      // Keep-omitted / clear-on-empty semantics:
+      apiKey: patch.apiKey !== undefined ? patch.apiKey : row.apiKey ?? "",
+      model: patch.model !== undefined ? patch.model : row.model ?? "deepseek-v4-flash",
+      baseUrl: patch.baseUrl !== undefined ? patch.baseUrl : row.baseUrl ?? "https://api.deepseek.com",
+      promptsJson: patch.prompts !== undefined ? JSON.stringify(patch.prompts) : (row.promptsJson ?? "{}"),
+      updatedAt: now(),
+    } as any).where(eq(aiSettings.id, row.id)).returning().get();
+    let prompts: Record<string, string> = {};
+    try {
+      const parsed = JSON.parse(updated.promptsJson ?? "{}");
+      if (parsed && typeof parsed === "object") prompts = parsed;
+    } catch { prompts = {}; }
+    return {
+      apiKey: updated.apiKey ?? "",
+      model: updated.model ?? "deepseek-v4-flash",
+      baseUrl: updated.baseUrl ?? "https://api.deepseek.com",
+      prompts,
+      updatedAt: updated.updatedAt ?? null,
+    };
+  }
+
+  async getAiEnrichStatus(): Promise<AiEnrichStatus> {
+    const row = db.select().from(aiEnrichState).get();
+    if (!row) throw new Error("ai enrich state not initialized");
+    const status = (row.status as AiEnrichStatus["status"]) || "Idle";
+    const dismissed = !!row.dismissed;
+    const active = status === "Enriching spots with AI";
+    const visible = active || (!dismissed && status !== "Idle");
+    return {
+      status,
+      totalSpots: row.totalSpots ?? 0,
+      completedSpots: row.completedSpots ?? 0,
+      message: row.message ?? "",
+      dismissible: !!row.dismissible,
+      dismissed,
+      updatedAt: row.updatedAt ?? null,
+      active,
+      visible,
+    };
+  }
+
+  async setAiEnrichStatus(next: Partial<Omit<AiEnrichStatus, "active" | "visible">> & { status: AiEnrichStatus["status"] }): Promise<AiEnrichStatus> {
+    const row = db.select().from(aiEnrichState).get();
+    if (!row) throw new Error("ai enrich state not initialized");
+    db.update(aiEnrichState).set({
+      status: next.status,
+      totalSpots: next.totalSpots ?? row.totalSpots ?? 0,
+      completedSpots: next.completedSpots ?? row.completedSpots ?? 0,
+      message: next.message ?? row.message ?? "",
+      dismissible: next.dismissible ?? row.dismissible ?? false,
+      dismissed: next.dismissed ?? row.dismissed ?? false,
+      updatedAt: now(),
+    } as any).where(eq(aiEnrichState.id, row.id)).run();
+    return this.getAiEnrichStatus();
+  }
+
+  async dismissAiEnrichStatus(): Promise<AiEnrichStatus> {
+    const row = db.select().from(aiEnrichState).get();
+    if (!row) throw new Error("ai enrich state not initialized");
+    db.update(aiEnrichState).set({ dismissed: true, updatedAt: now() } as any).where(eq(aiEnrichState.id, row.id)).run();
+    return this.getAiEnrichStatus();
+  }
+
+  async logAiEnrichCall(entry: { spotId?: number | null; spotName?: string; status: "success" | "failed" | "skipped"; writtenFields?: string[]; skippedFields?: string[]; error?: string | null }): Promise<AiEnrichLogEntry> {
+    const result = sqlite.prepare(
+      `INSERT INTO ai_enrich_log (spot_id, spot_name, status, written_fields, skipped_fields, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      entry.spotId ?? null,
+      entry.spotName ?? "",
+      entry.status,
+      JSON.stringify(entry.writtenFields ?? []),
+      JSON.stringify(entry.skippedFields ?? []),
+      entry.error ?? null,
+      now(),
+    );
+    return this._aiEnrichLogFromRow(
+      sqlite.prepare(`SELECT id, spot_id, spot_name, status, written_fields, skipped_fields, error, created_at FROM ai_enrich_log WHERE id = ?`)
+        .get(Number(result.lastInsertRowid)) as any,
+    );
+  }
+
+  private _aiEnrichLogFromRow(r: any): AiEnrichLogEntry {
+    const parse = (v: any): string[] => {
+      try { const a = JSON.parse(v ?? "[]"); return Array.isArray(a) ? a : []; } catch { return []; }
+    };
+    return {
+      id: r.id,
+      spotId: r.spot_id ?? null,
+      spotName: r.spot_name ?? "",
+      status: r.status as AiEnrichLogEntry["status"],
+      writtenFields: parse(r.written_fields),
+      skippedFields: parse(r.skipped_fields),
+      error: r.error ?? null,
+      createdAt: r.created_at ?? null,
+    };
+  }
+
+  async listAiEnrichLog(limit = 50): Promise<AiEnrichLogEntry[]> {
+    const rows = sqlite.prepare(
+      `SELECT id, spot_id, spot_name, status, written_fields, skipped_fields, error, created_at FROM ai_enrich_log ORDER BY id DESC LIMIT ?`
+    ).all(limit) as any[];
+    return rows.map(r => this._aiEnrichLogFromRow(r));
   }
 
   async listTrash(): Promise<TrashItem[]> {

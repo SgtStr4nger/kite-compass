@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { LogOut, LayoutGrid, FileText, ExternalLink, School, Hotel, Users, Search, Trash2, ArrowRightLeft, AlertCircle, CloudSun, Rocket, RefreshCw, Settings } from "lucide-react";
 import { applyRobotsMetadata } from "@/lib/metadata";
 import { api } from "@/lib/api";
-import { ExcelImportStatus, ScoringStatus, WeatherRefreshStatus } from "@/lib/types";
+import { ExcelImportStatus, ScoringStatus, WeatherRefreshStatus, AiEnrichStatus } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
 import { Sparkles } from "lucide-react";
 
@@ -21,6 +21,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
   const [excelStatus, setExcelStatus] = useState<ExcelImportStatus | null>(null);
   const [scoringStatus, setScoringStatus] = useState<ScoringStatus | null>(null);
   const [weatherStatus, setWeatherStatus] = useState<WeatherRefreshStatus | null>(null);
+  const [aiStatus, setAiStatus] = useState<AiEnrichStatus | null>(null);
   const [openErrorCount, setOpenErrorCount] = useState(0);
   const [deploying, setDeploying] = useState(false);
   const { toast } = useToast();
@@ -115,6 +116,53 @@ export function AdminLayout({ children }: { children: ReactNode }) {
     return () => { alive = false; if (timerId !== null) window.clearTimeout(timerId); };
   }, [token]);
 
+  useEffect(() => {
+    if (!token) return;
+    let alive = true;
+    let timerId: number | null = null;
+    // Used to fire the "job finished → refresh spots" event exactly once per run.
+    let wasActive = false;
+
+    const scheduleNext = (intervalMs: number) => {
+      if (!alive) return;
+      timerId = window.setTimeout(() => { void poll(); }, intervalMs);
+    };
+
+    const poll = async () => {
+      try {
+        const status = await api<AiEnrichStatus>("GET", "/api/admin/ai/enrich/status");
+        if (!alive) return;
+        setAiStatus(status);
+        if (status.active) {
+          wasActive = true;
+          scheduleNext(2000);
+        } else {
+          // Detect the active→terminal transition so the Spots table can refetch
+          // and show freshly-written AI drafts without a manual page refresh.
+          if (wasActive && (status.status === "AI enrichment completed" || status.status === "AI enrichment failed")) {
+            wasActive = false;
+            window.dispatchEvent(new CustomEvent("ai-enrich-done"));
+          }
+          if (!status.visible) scheduleNext(30_000);
+          else scheduleNext(5000);
+        }
+      } catch {
+        if (alive) scheduleNext(15_000);
+      }
+    };
+
+    // Let the Spots page trigger an immediate poll right after starting a run.
+    const onRefresh = () => { if (!alive) return; if (timerId !== null) window.clearTimeout(timerId); void poll(); };
+    window.addEventListener("ai-enrich-refresh", onRefresh);
+
+    void poll();
+    return () => {
+      alive = false;
+      if (timerId !== null) window.clearTimeout(timerId);
+      window.removeEventListener("ai-enrich-refresh", onRefresh);
+    };
+  }, [token]);
+
   // Poll open error count for nav badge
   useEffect(() => {
     if (!token) return;
@@ -157,6 +205,12 @@ export function AdminLayout({ children }: { children: ReactNode }) {
     try {
       await api("POST", "/api/admin/weather-refresh/dismiss");
       setWeatherStatus(prev => prev ? { ...prev, dismissed: true, visible: false, active: false } : prev);
+    } catch {}
+  };
+  const dismissAiBanner = async () => {
+    try {
+      await api("POST", "/api/admin/ai/enrich/dismiss");
+      setAiStatus(prev => prev ? { ...prev, dismissed: true, visible: false, active: false } : prev);
     } catch {}
   };
   const openImportCategory = () => {
@@ -241,6 +295,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
             {navLink("/admin/redirects", <ArrowRightLeft className="h-4 w-4" />, "Redirects", "link-admin-redirects")}
             {navLink("/admin/legal", <FileText className="h-4 w-4" />, "Legal", "link-admin-legal")}
             {navLink("/admin/users", <Users className="h-4 w-4" />, "Users", "link-admin-users")}
+            {navLink("/admin/ai", <Sparkles className="h-4 w-4" />, "AI", "link-admin-ai")}
             <Link href="/admin/errors"
               className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium no-underline transition-colors ${location === "/admin/errors" ? "bg-sidebar-accent text-sidebar-foreground" : "text-sidebar-foreground/90 hover:bg-sidebar-accent"}`}
               data-testid="link-admin-errors">
@@ -338,6 +393,22 @@ export function AdminLayout({ children }: { children: ReactNode }) {
               </div>
               {!weatherStatus.active && weatherStatus.dismissible && (
                 <Button size="sm" variant="outline" onClick={dismissWeatherBanner}>Dismiss</Button>
+              )}
+            </div>
+          </div>
+        )}
+        {aiStatus?.visible && (
+          <div className={`border-b px-5 py-3 text-sm md:px-8 ${aiStatus.active ? "border-amber-300 bg-amber-50 text-amber-900" : aiStatus.status === "AI enrichment failed" ? "border-rose-300 bg-rose-50 text-rose-900" : "border-emerald-300 bg-emerald-50 text-emerald-900"}`}>
+            <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold ${aiStatus.active ? "bg-amber-100 text-amber-900" : aiStatus.status === "AI enrichment failed" ? "bg-rose-100 text-rose-900" : "bg-emerald-100 text-emerald-900"}`}>
+                  <Sparkles className="h-3.5 w-3.5" />
+                  {aiStatus.status}
+                </span>
+                <span className="font-medium">{aiStatus.message || " "}</span>
+              </div>
+              {!aiStatus.active && aiStatus.dismissible && (
+                <Button size="sm" variant="outline" onClick={dismissAiBanner}>Dismiss</Button>
               )}
             </div>
           </div>
