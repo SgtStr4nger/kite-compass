@@ -223,7 +223,6 @@ export default function AdminDataTable<T>({
       <div className="overflow-x-auto">
         <Table>
           <TableHeader>
-            {/* Header row 1: titles + sort */}
             <TableRow className="border-b border-border text-muted-foreground">
               {onSelect && (
                 <TableHead className="w-10 px-2 py-3">
@@ -235,40 +234,32 @@ export default function AdminDataTable<T>({
               )}
               {columns.map((col) => (
                 <TableHead key={col.key} className={cn("font-medium py-3", col.headerClassName)} style={{ width: col.width }}>
-                  {col.sortable ? (
-                    <button
-                      type="button"
-                      onClick={() => onSortChange?.(col.key)}
-                      className="inline-flex items-center gap-1 hover:text-foreground"
-                    >
-                      {col.header}
-                      {sortBy === col.key ? (
-                        sortDir === "asc" ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />
-                      ) : null}
-                    </button>
-                  ) : (
-                    col.header
-                  )}
-                </TableHead>
-              ))}
-            </TableRow>
-            {/* Header row 2: per-column filter icons */}
-            {columns.some((c) => c.filterable) && (
-              <TableRow className="border-b border-border">
-                {onSelect && <TableHead className="w-10 px-2 py-1" />}
-                {columns.map((col) => (
-                  <TableHead key={col.key} className={cn("py-1", col.headerClassName)} style={{ width: col.width }}>
-                    {col.filterable && onFilterChange ? (
+                  <div className="flex items-center gap-1">
+                    {col.sortable ? (
+                      <button
+                        type="button"
+                        onClick={() => onSortChange?.(col.key)}
+                        className="inline-flex items-center gap-1 hover:text-foreground"
+                      >
+                        {col.header}
+                        {sortBy === col.key ? (
+                          sortDir === "asc" ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />
+                        ) : null}
+                      </button>
+                    ) : (
+                      <span>{col.header}</span>
+                    )}
+                    {col.filterable && onFilterChange && (
                       <HeaderFilterCell
                         column={col}
                         value={filters[col.key]}
                         onFilterChange={onFilterChange}
                       />
-                    ) : null}
-                  </TableHead>
-                ))}
-              </TableRow>
-            )}
+                    )}
+                  </div>
+                </TableHead>
+              ))}
+            </TableRow>
           </TableHeader>
           <TableBody>
             {loading && (
@@ -366,13 +357,14 @@ function HeaderFilterCell({
       <PopoverTrigger asChild>
         <button
           type="button"
+          title={`Filter ${column.header}`}
           className={cn(
-            "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs",
-            active ? "border-primary bg-primary/10 text-foreground" : "border-border text-muted-foreground hover:bg-accent",
+            "relative inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors",
+            active ? "text-primary" : "text-muted-foreground hover:bg-accent hover:text-foreground",
           )}
         >
-          <Filter className="h-3 w-3" />
-          {active && <span className="h-1.5 w-1.5 rounded-full bg-primary" />}
+          <Filter className="h-3.5 w-3.5" />
+          {active && <span className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-primary" />}
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-64 p-3">
