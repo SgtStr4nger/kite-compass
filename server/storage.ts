@@ -824,6 +824,7 @@ export interface IStorage {
   // spots
   listSpots(publishedOnly: boolean): Promise<Spot[]>;
   listAllSpots(filter: ListingsFilter): Promise<ListingsPage<Spot & { monthlyCount: number }>>;
+  listAllSpotIds(filter: ListingsFilter): Promise<number[]>;
   getSpot(id: number): Promise<Spot | undefined>;
   getSpotBySlug(slug: string): Promise<Spot | undefined>;
   createSpot(s: InsertSpot): Promise<Spot>;
@@ -843,6 +844,7 @@ export interface IStorage {
   // schools — global entity CRUD
   getSchool(id: number): Promise<School | undefined>;
   listAllSchools(filter: ListingsFilter): Promise<ListingsPage<School & { assignedSpotsCount: number }>>;
+  listAllSchoolIds(filter: ListingsFilter): Promise<number[]>;
   createSchool(s: InsertSchool): Promise<School>;
   updateSchool(id: number, s: Partial<InsertSchool>): Promise<School | undefined>;
   publishSchool(id: number): Promise<School | undefined>;
@@ -855,6 +857,7 @@ export interface IStorage {
   // stays — global entity CRUD
   getStay(id: number): Promise<Stay | undefined>;
   listAllStays(filter: ListingsFilter): Promise<ListingsPage<Stay & { assignedSpotsCount: number }>>;
+  listAllStayIds(filter: ListingsFilter): Promise<number[]>;
   createStay(s: InsertStay): Promise<Stay>;
   updateStay(id: number, s: Partial<InsertStay>): Promise<Stay | undefined>;
   publishStay(id: number): Promise<Stay | undefined>;
@@ -906,6 +909,98 @@ export interface IStorage {
   resolveAdminError(id: number): Promise<void>;
   countOpenAdminErrors(): Promise<number>;
   purgeOldAdminErrors(): Promise<void>;
+}
+
+// ── Shared filter chains ───────────────────────────────────────────────
+// The listAll* and listAll*Ids methods must apply identical filters so a
+// select-all ID query can never diverge from what the table actually shows.
+function applySpotFilters(all: Spot[], filter: ListingsFilter): Spot[] {
+  let rows = all;
+  if (filter.search) {
+    const q = filter.search.toLowerCase();
+    rows = rows.filter(s => s.name.toLowerCase().includes(q));
+  }
+  if (filter.countries?.length) {
+    const set = new Set(filter.countries);
+    rows = rows.filter(s => set.has(s.country ?? ""));
+  }
+  if (filter.published !== undefined) rows = rows.filter(s => !!s.published === filter.published);
+  if (filter.contentStatus) rows = rows.filter(s => computeContentStatus(s) === filter.contentStatus);
+  if (filter.dataStatus) rows = rows.filter(s => spotDataStatus(s) === filter.dataStatus);
+  if (filter.updatedFrom) {
+    const from = parseIsoMs(filter.updatedFrom);
+    if (from != null) rows = rows.filter(s => (parseIsoMs(s.updatedAt) ?? 0) >= from);
+  }
+  if (filter.updatedTo) {
+    const to = parseIsoMs(filter.updatedTo);
+    if (to != null) rows = rows.filter(s => (parseIsoMs(s.updatedAt) ?? 0) <= to);
+  }
+  if (filter.publishedFrom) {
+    const from = parseIsoMs(filter.publishedFrom);
+    if (from != null) rows = rows.filter(s => (parseIsoMs(s.publishedAt) ?? 0) >= from);
+  }
+  if (filter.publishedTo) {
+    const to = parseIsoMs(filter.publishedTo);
+    if (to != null) rows = rows.filter(s => (parseIsoMs(s.publishedAt) ?? 0) <= to);
+  }
+  return rows;
+}
+
+function applySchoolFilters(all: School[], filter: ListingsFilter, assignments: SpotSchool[]): School[] {
+  let rows = all;
+  if (filter.search) {
+    const q = filter.search.toLowerCase();
+    rows = rows.filter(s => s.name.toLowerCase().includes(q));
+  }
+  if (filter.published !== undefined) rows = rows.filter(s => !!s.published === filter.published);
+  if (filter.spotId !== undefined) {
+    const ids = new Set(assignments.filter(a => a.spotId === filter.spotId).map(a => a.schoolId));
+    rows = rows.filter(s => ids.has(s.id));
+  }
+  if (filter.missingWebsite) rows = rows.filter(s => !s.websiteUrl);
+  if (filter.missingMap) rows = rows.filter(s => !s.mapUrl);
+  if (filter.offersLessons !== undefined) rows = rows.filter(s => !!s.offersLessons === filter.offersLessons);
+  if (filter.offersRental !== undefined) rows = rows.filter(s => !!s.offersRental === filter.offersRental);
+  if (filter.sports?.length) {
+    rows = rows.filter(s => {
+      const sp = tryParseArr(s.sports);
+      return filter.sports!.some(x => sp.includes(x));
+    });
+  }
+  if (filter.updatedFrom) {
+    const from = parseIsoMs(filter.updatedFrom);
+    if (from != null) rows = rows.filter(s => (parseIsoMs(s.updatedAt) ?? 0) >= from);
+  }
+  if (filter.updatedTo) {
+    const to = parseIsoMs(filter.updatedTo);
+    if (to != null) rows = rows.filter(s => (parseIsoMs(s.updatedAt) ?? 0) <= to);
+  }
+  return rows;
+}
+
+function applyStayFilters(all: Stay[], filter: ListingsFilter, assignments: SpotStay[]): Stay[] {
+  let rows = all;
+  if (filter.search) {
+    const q = filter.search.toLowerCase();
+    rows = rows.filter(s => s.name.toLowerCase().includes(q));
+  }
+  if (filter.published !== undefined) rows = rows.filter(s => !!s.published === filter.published);
+  if (filter.spotId !== undefined) {
+    const ids = new Set(assignments.filter(a => a.spotId === filter.spotId).map(a => a.stayId));
+    rows = rows.filter(s => ids.has(s.id));
+  }
+  if (filter.missingWebsite) rows = rows.filter(s => !s.websiteUrl);
+  if (filter.missingMap) rows = rows.filter(s => !s.mapUrl);
+  if (filter.type) rows = rows.filter(s => s.type === filter.type);
+  if (filter.updatedFrom) {
+    const from = parseIsoMs(filter.updatedFrom);
+    if (from != null) rows = rows.filter(s => (parseIsoMs(s.updatedAt) ?? 0) >= from);
+  }
+  if (filter.updatedTo) {
+    const to = parseIsoMs(filter.updatedTo);
+    if (to != null) rows = rows.filter(s => (parseIsoMs(s.updatedAt) ?? 0) <= to);
+  }
+  return rows;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -973,40 +1068,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   async listAllSpots(filter: ListingsFilter): Promise<ListingsPage<Spot & { monthlyCount: number }>> {
-    let all = db.select().from(spots).where(isNull(spots.deletedAt)).all();
+    const all = applySpotFilters(db.select().from(spots).where(isNull(spots.deletedAt)).all(), filter);
 
     // monthly counts via one grouped pass over all monthly rows
     const monthly = db.select().from(monthlyRecords).all();
     const countById: Record<number, number> = {};
     for (const m of monthly) countById[m.spotId] = (countById[m.spotId] || 0) + 1;
-
-    if (filter.search) {
-      const q = filter.search.toLowerCase();
-      all = all.filter(s => s.name.toLowerCase().includes(q));
-    }
-    if (filter.countries?.length) {
-      const set = new Set(filter.countries);
-      all = all.filter(s => set.has(s.country ?? ""));
-    }
-    if (filter.published !== undefined) all = all.filter(s => !!s.published === filter.published);
-    if (filter.contentStatus) all = all.filter(s => computeContentStatus(s) === filter.contentStatus);
-    if (filter.dataStatus) all = all.filter(s => spotDataStatus(s) === filter.dataStatus);
-    if (filter.updatedFrom) {
-      const from = parseIsoMs(filter.updatedFrom);
-      if (from != null) all = all.filter(s => (parseIsoMs(s.updatedAt) ?? 0) >= from);
-    }
-    if (filter.updatedTo) {
-      const to = parseIsoMs(filter.updatedTo);
-      if (to != null) all = all.filter(s => (parseIsoMs(s.updatedAt) ?? 0) <= to);
-    }
-    if (filter.publishedFrom) {
-      const from = parseIsoMs(filter.publishedFrom);
-      if (from != null) all = all.filter(s => (parseIsoMs(s.publishedAt) ?? 0) >= from);
-    }
-    if (filter.publishedTo) {
-      const to = parseIsoMs(filter.publishedTo);
-      if (to != null) all = all.filter(s => (parseIsoMs(s.publishedAt) ?? 0) <= to);
-    }
 
     const sortBy = filter.sortBy || "updatedAt";
     const sortDir = filter.sortDir || "desc";
@@ -1024,6 +1091,11 @@ export class DatabaseStorage implements IStorage {
     const start = (page - 1) * perPage;
     const items = all.slice(start, start + perPage).map(s => ({ ...s, monthlyCount: countById[s.id] || 0 }));
     return { items, total, page, perPage };
+  }
+
+  async listAllSpotIds(filter: ListingsFilter): Promise<number[]> {
+    const all = applySpotFilters(db.select().from(spots).where(isNull(spots.deletedAt)).all(), filter);
+    return all.map(s => s.id);
   }
   async getSpot(id: number) {
     return db.select().from(spots).where(and(eq(spots.id, id), isNull(spots.deletedAt))).get();
@@ -1126,38 +1198,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async listAllSchools(filter: ListingsFilter): Promise<ListingsPage<School & { assignedSpotsCount: number }>> {
-    let all = db.select().from(schools).where(isNull(schools.deletedAt)).all();
+    const all = applySchoolFilters(db.select().from(schools).where(isNull(schools.deletedAt)).all(), filter, db.select().from(spotSchools).all());
     const assignments = db.select().from(spotSchools).all();
     const assignCountById: Record<number, number> = {};
     for (const a of assignments) assignCountById[a.schoolId] = (assignCountById[a.schoolId] || 0) + 1;
-
-    if (filter.search) {
-      const q = filter.search.toLowerCase();
-      all = all.filter(s => s.name.toLowerCase().includes(q));
-    }
-    if (filter.published !== undefined) all = all.filter(s => !!s.published === filter.published);
-    if (filter.spotId !== undefined) {
-      const ids = new Set(assignments.filter(a => a.spotId === filter.spotId).map(a => a.schoolId));
-      all = all.filter(s => ids.has(s.id));
-    }
-    if (filter.missingWebsite) all = all.filter(s => !s.websiteUrl);
-    if (filter.missingMap) all = all.filter(s => !s.mapUrl);
-    if (filter.offersLessons !== undefined) all = all.filter(s => !!s.offersLessons === filter.offersLessons);
-    if (filter.offersRental !== undefined) all = all.filter(s => !!s.offersRental === filter.offersRental);
-    if (filter.sports?.length) {
-      all = all.filter(s => {
-        const sp = tryParseArr(s.sports);
-        return filter.sports!.some(x => sp.includes(x));
-      });
-    }
-    if (filter.updatedFrom) {
-      const from = parseIsoMs(filter.updatedFrom);
-      if (from != null) all = all.filter(s => (parseIsoMs(s.updatedAt) ?? 0) >= from);
-    }
-    if (filter.updatedTo) {
-      const to = parseIsoMs(filter.updatedTo);
-      if (to != null) all = all.filter(s => (parseIsoMs(s.updatedAt) ?? 0) <= to);
-    }
 
     const sortBy = filter.sortBy || "updatedAt";
     const sortDir = filter.sortDir || "desc";
@@ -1173,6 +1217,11 @@ export class DatabaseStorage implements IStorage {
     const start = (page - 1) * perPage;
     const items = all.slice(start, start + perPage).map(s => ({ ...s, assignedSpotsCount: assignCountById[s.id] || 0 }));
     return { items, total, page, perPage };
+  }
+
+  async listAllSchoolIds(filter: ListingsFilter): Promise<number[]> {
+    const all = applySchoolFilters(db.select().from(schools).where(isNull(schools.deletedAt)).all(), filter, db.select().from(spotSchools).all());
+    return all.map(s => s.id);
   }
 
   async createSchool(s: InsertSchool) {
@@ -1232,31 +1281,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async listAllStays(filter: ListingsFilter): Promise<ListingsPage<Stay & { assignedSpotsCount: number }>> {
-    let all = db.select().from(stays).where(isNull(stays.deletedAt)).all();
+    const all = applyStayFilters(db.select().from(stays).where(isNull(stays.deletedAt)).all(), filter, db.select().from(spotStays).all());
     const assignments = db.select().from(spotStays).all();
     const assignCountById: Record<number, number> = {};
     for (const a of assignments) assignCountById[a.stayId] = (assignCountById[a.stayId] || 0) + 1;
-
-    if (filter.search) {
-      const q = filter.search.toLowerCase();
-      all = all.filter(s => s.name.toLowerCase().includes(q));
-    }
-    if (filter.published !== undefined) all = all.filter(s => !!s.published === filter.published);
-    if (filter.spotId !== undefined) {
-      const ids = new Set(assignments.filter(a => a.spotId === filter.spotId).map(a => a.stayId));
-      all = all.filter(s => ids.has(s.id));
-    }
-    if (filter.missingWebsite) all = all.filter(s => !s.websiteUrl);
-    if (filter.missingMap) all = all.filter(s => !s.mapUrl);
-    if (filter.type) all = all.filter(s => s.type === filter.type);
-    if (filter.updatedFrom) {
-      const from = parseIsoMs(filter.updatedFrom);
-      if (from != null) all = all.filter(s => (parseIsoMs(s.updatedAt) ?? 0) >= from);
-    }
-    if (filter.updatedTo) {
-      const to = parseIsoMs(filter.updatedTo);
-      if (to != null) all = all.filter(s => (parseIsoMs(s.updatedAt) ?? 0) <= to);
-    }
 
     const sortBy = filter.sortBy || "updatedAt";
     const sortDir = filter.sortDir || "desc";
@@ -1272,6 +1300,11 @@ export class DatabaseStorage implements IStorage {
     const start = (page - 1) * perPage;
     const items = all.slice(start, start + perPage).map(s => ({ ...s, assignedSpotsCount: assignCountById[s.id] || 0 }));
     return { items, total, page, perPage };
+  }
+
+  async listAllStayIds(filter: ListingsFilter): Promise<number[]> {
+    const all = applyStayFilters(db.select().from(stays).where(isNull(stays.deletedAt)).all(), filter, db.select().from(spotStays).all());
+    return all.map(s => s.id);
   }
 
   async createStay(s: InsertStay) {

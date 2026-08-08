@@ -1051,6 +1051,54 @@ function parseSpotIds(raw: unknown): number[] {
     .map(v => Number(v))
     .filter((v): v is number => Number.isFinite(v) && v > 0);
 }
+
+// Shared ListingsFilter builders so the list routes and the /ids routes can
+// never diverge on what a given set of query params should match.
+function spotListingsFilter(q: Record<string, any>): ListingsFilter {
+  return {
+    search: (q.search as string) || undefined,
+    published: q.published !== undefined ? q.published === "true" : undefined,
+    countries: q.countries ? ([] as string[]).concat(q.countries as any) : undefined,
+    contentStatus: (q.contentStatus as any) || undefined,
+    dataStatus: (q.dataStatus as any) || undefined,
+    updatedFrom: (q.updatedFrom as string) || undefined,
+    updatedTo: (q.updatedTo as string) || undefined,
+    publishedFrom: (q.publishedFrom as string) || undefined,
+    publishedTo: (q.publishedTo as string) || undefined,
+    sortBy: (q.sortBy as any) || "updatedAt",
+    sortDir: (q.sortDir as any) || "desc",
+  };
+}
+function schoolListingsFilter(q: Record<string, any>): ListingsFilter {
+  return {
+    search: (q.search as string) || undefined,
+    published: q.published !== undefined ? q.published === "true" : undefined,
+    spotId: q.spotId ? Number(q.spotId) : undefined,
+    missingWebsite: q.missingWebsite === "true" ? true : undefined,
+    missingMap: q.missingMap === "true" ? true : undefined,
+    offersLessons: q.offersLessons !== undefined ? q.offersLessons === "true" : undefined,
+    offersRental: q.offersRental !== undefined ? q.offersRental === "true" : undefined,
+    sports: q.sports ? ([] as string[]).concat(q.sports as any) : undefined,
+    updatedFrom: (q.updatedFrom as string) || undefined,
+    updatedTo: (q.updatedTo as string) || undefined,
+    sortBy: (q.sortBy as any) || "updatedAt",
+    sortDir: (q.sortDir as any) || "desc",
+  };
+}
+function stayListingsFilter(q: Record<string, any>): ListingsFilter {
+  return {
+    search: (q.search as string) || undefined,
+    published: q.published !== undefined ? q.published === "true" : undefined,
+    spotId: q.spotId ? Number(q.spotId) : undefined,
+    missingWebsite: q.missingWebsite === "true" ? true : undefined,
+    missingMap: q.missingMap === "true" ? true : undefined,
+    type: (q.type as string) || undefined,
+    updatedFrom: (q.updatedFrom as string) || undefined,
+    updatedTo: (q.updatedTo as string) || undefined,
+    sortBy: (q.sortBy as any) || "updatedAt",
+    sortDir: (q.sortDir as any) || "desc",
+  };
+}
 function isEligibleForWeatherRefresh(spot: Spot): boolean {
   return !!spot.latitude && !!spot.longitude;
 }
@@ -2341,24 +2389,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // Server-side paginated/filtered spot listing (used by the unified Spots admin table).
   app.get("/api/admin/listings/spots", requireAuth, async (req, res) => {
-    const q = req.query;
     const filter: ListingsFilter = {
-      search: (q.search as string) || undefined,
-      published: q.published !== undefined ? q.published === "true" : undefined,
-      countries: q.countries ? ([] as string[]).concat(q.countries as any) : undefined,
-      contentStatus: (q.contentStatus as any) || undefined,
-      dataStatus: (q.dataStatus as any) || undefined,
-      updatedFrom: (q.updatedFrom as string) || undefined,
-      updatedTo: (q.updatedTo as string) || undefined,
-      publishedFrom: (q.publishedFrom as string) || undefined,
-      publishedTo: (q.publishedTo as string) || undefined,
-      sortBy: (q.sortBy as any) || "updatedAt",
-      sortDir: (q.sortDir as any) || "desc",
-      page: q.page ? Number(q.page) : 1,
-      perPage: q.perPage ? Number(q.perPage) : 50,
+      ...spotListingsFilter(req.query),
+      page: req.query.page ? Number(req.query.page) : 1,
+      perPage: req.query.perPage ? Number(req.query.perPage) : 50,
     };
     const result = await storage.listAllSpots(filter);
     res.json({ ...result, items: result.items.map(s => serializeSpot(s, true)) });
+  });
+
+  app.get("/api/admin/listings/spots/ids", requireAuth, async (req, res) => {
+    const ids = await storage.listAllSpotIds(spotListingsFilter(req.query));
+    res.json({ ids, total: ids.length });
   });
 
   app.get("/api/admin/spots/:id", requireAuth, async (req, res) => {
@@ -2493,13 +2535,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json({ spot: serializeSpot(publishedSpot!, true), publishedCount, recalculatedRows });
   });
 
-  app.post("/api/admin/spots/publish-bulk", requireAuth, async (req, res) => {
-    const mode = parseSpotPublishMode(req.body?.mode);
-    const scopedIds = Array.from(new Set(parseSpotIds(req.body?.spotIds)));
-    if (!scopedIds.length) return res.status(400).json({ error: "spotIds required" });
+  async function runSpotBulkPublish(mode: SpotPublishMode, spotIds: number[]) {
+    const scopedIds = Array.from(new Set(spotIds));
     const availableSpots = await storage.listSpots(false);
     const targetSpots = availableSpots.filter((spot) => scopedIds.includes(spot.id));
-    if (!targetSpots.length) return res.status(404).json({ error: "no matching spots found" });
 
     let contentPublished = 0;
     let weatherPublished = 0;
@@ -2525,14 +2564,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     clearSitemapCache();
-    res.json({
+    return {
       mode,
       targetSpots: targetSpots.length,
       contentPublished,
       weatherPublished,
       recalculatedRows,
       skippedMissingCountry,
-    });
+    };
+  }
+
+  app.post("/api/admin/spots/publish-bulk", requireAuth, async (req, res) => {
+    const mode = parseSpotPublishMode(req.body?.mode);
+    const scopedIds = Array.from(new Set(parseSpotIds(req.body?.spotIds)));
+    if (!scopedIds.length) return res.status(400).json({ error: "spotIds required" });
+    const availableSpots = await storage.listSpots(false);
+    const targetSpots = availableSpots.filter((spot) => scopedIds.includes(spot.id));
+    if (!targetSpots.length) return res.status(404).json({ error: "no matching spots found" });
+    res.json(await runSpotBulkPublish(mode, scopedIds));
+  });
+
+  app.post("/api/admin/spots/publish-all", requireAuth, async (_req, res) => {
+    const availableSpots = await storage.listSpots(false);
+    if (!availableSpots.length) return res.json(await runSpotBulkPublish("content-weather", []));
+    res.json(await runSpotBulkPublish("content-weather", availableSpots.map((s) => s.id)));
   });
 
   app.delete("/api/admin/spots/:id", requireAuth, async (req, res) => {
@@ -2786,25 +2841,41 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ── Global listing admin: Schools ──
   app.get("/api/admin/listings/schools", requireAuth, async (req, res) => {
-    const q = req.query;
     const filter: ListingsFilter = {
-      search: (q.search as string) || undefined,
-      published: q.published !== undefined ? q.published === "true" : undefined,
-      spotId: q.spotId ? Number(q.spotId) : undefined,
-      missingWebsite: q.missingWebsite === "true" ? true : undefined,
-      missingMap: q.missingMap === "true" ? true : undefined,
-      offersLessons: q.offersLessons !== undefined ? q.offersLessons === "true" : undefined,
-      offersRental: q.offersRental !== undefined ? q.offersRental === "true" : undefined,
-      sports: q.sports ? ([] as string[]).concat(q.sports as any) : undefined,
-      updatedFrom: (q.updatedFrom as string) || undefined,
-      updatedTo: (q.updatedTo as string) || undefined,
-      sortBy: (q.sortBy as any) || "updatedAt",
-      sortDir: (q.sortDir as any) || "desc",
-      page: q.page ? Number(q.page) : 1,
-      perPage: q.perPage ? Number(q.perPage) : 50,
+      ...schoolListingsFilter(req.query),
+      page: req.query.page ? Number(req.query.page) : 1,
+      perPage: req.query.perPage ? Number(req.query.perPage) : 50,
     };
     const result = await storage.listAllSchools(filter);
     res.json({ ...result, items: result.items.map(s => ({ ...s, sports: parseArr(s.sports) })) });
+  });
+
+  app.get("/api/admin/listings/schools/ids", requireAuth, async (req, res) => {
+    const ids = await storage.listAllSchoolIds(schoolListingsFilter(req.query));
+    res.json({ ids, total: ids.length });
+  });
+
+  app.post("/api/admin/listings/schools/publish-bulk", requireAuth, async (req, res) => {
+    const scopedIds = Array.from(new Set(parseSpotIds(req.body?.schoolIds)));
+    if (!scopedIds.length) return res.status(400).json({ error: "schoolIds required" });
+    let published = 0;
+    for (const id of scopedIds) {
+      const row = await storage.publishSchool(id);
+      if (row) published++;
+    }
+    clearSitemapCache();
+    res.json({ published, requested: scopedIds.length });
+  });
+
+  app.post("/api/admin/listings/schools/publish-all", requireAuth, async (_req, res) => {
+    const ids = await storage.listAllSchoolIds({});
+    let published = 0;
+    for (const id of ids) {
+      const row = await storage.publishSchool(id);
+      if (row) published++;
+    }
+    clearSitemapCache();
+    res.json({ published, requested: ids.length });
   });
 
   app.post("/api/admin/listings/schools", requireAuth, async (req, res) => {
@@ -2834,23 +2905,41 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ── Global listing admin: Stays ──
   app.get("/api/admin/listings/stays", requireAuth, async (req, res) => {
-    const q = req.query;
     const filter: ListingsFilter = {
-      search: (q.search as string) || undefined,
-      published: q.published !== undefined ? q.published === "true" : undefined,
-      spotId: q.spotId ? Number(q.spotId) : undefined,
-      missingWebsite: q.missingWebsite === "true" ? true : undefined,
-      missingMap: q.missingMap === "true" ? true : undefined,
-      type: (q.type as string) || undefined,
-      updatedFrom: (q.updatedFrom as string) || undefined,
-      updatedTo: (q.updatedTo as string) || undefined,
-      sortBy: (q.sortBy as any) || "updatedAt",
-      sortDir: (q.sortDir as any) || "desc",
-      page: q.page ? Number(q.page) : 1,
-      perPage: q.perPage ? Number(q.perPage) : 50,
+      ...stayListingsFilter(req.query),
+      page: req.query.page ? Number(req.query.page) : 1,
+      perPage: req.query.perPage ? Number(req.query.perPage) : 50,
     };
     const result = await storage.listAllStays(filter);
     res.json(result);
+  });
+
+  app.get("/api/admin/listings/stays/ids", requireAuth, async (req, res) => {
+    const ids = await storage.listAllStayIds(stayListingsFilter(req.query));
+    res.json({ ids, total: ids.length });
+  });
+
+  app.post("/api/admin/listings/stays/publish-bulk", requireAuth, async (req, res) => {
+    const scopedIds = Array.from(new Set(parseSpotIds(req.body?.stayIds)));
+    if (!scopedIds.length) return res.status(400).json({ error: "stayIds required" });
+    let published = 0;
+    for (const id of scopedIds) {
+      const row = await storage.publishStay(id);
+      if (row) published++;
+    }
+    clearSitemapCache();
+    res.json({ published, requested: scopedIds.length });
+  });
+
+  app.post("/api/admin/listings/stays/publish-all", requireAuth, async (_req, res) => {
+    const ids = await storage.listAllStayIds({});
+    let published = 0;
+    for (const id of ids) {
+      const row = await storage.publishStay(id);
+      if (row) published++;
+    }
+    clearSitemapCache();
+    res.json({ published, requested: ids.length });
   });
 
   app.post("/api/admin/listings/stays", requireAuth, async (req, res) => {

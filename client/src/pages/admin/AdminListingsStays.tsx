@@ -5,10 +5,12 @@ import { api } from "@/lib/api";
 import { AdminLayout } from "./AdminLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Stay, ListingsPage, STAY_TYPES, ExcelImportAction, ExcelImportHistoryItem, ExcelImportPreviewResponse, AdminTableColumn, ColumnFilterValue, AdminFilterOption } from "@/lib/types";
 import AdminDataTable from "@/components/admin/AdminDataTable";
-import { Plus, Check, X, Globe, Map, Trash2 } from "lucide-react";
+import { Plus, Check, X, Globe, Map, Trash2, SendHorizontal, ChevronDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { useCrossPageSelection } from "@/hooks/useCrossPageSelection";
 
 type StayRow = Stay & { assignedSpotsCount: number };
 const PER_PAGE_OPTIONS = [25, 50, 100];
@@ -79,6 +81,8 @@ export default function AdminListingsStays() {
   const [preview, setPreview] = useState<ExcelImportPreviewResponse | null>(null);
   const [importBusy, setImportBusy] = useState(false);
   const [history, setHistory] = useState<ExcelImportHistoryItem[]>([]);
+  const [busy, setBusy] = useState<null | string>(null);
+  const running = busy !== null;
 
   useEffect(() => {
     if (!token) navigate("/admin");
@@ -117,6 +121,68 @@ export default function AdminListingsStays() {
     [state.q, state.published, state.type, state.missingWebsite, state.missingMap, state.updatedFrom, state.updatedTo],
   );
 
+  const filtersActive = state.q.trim().length > 0 || !!state.published || !!state.type || !!state.missingWebsite || !!state.missingMap || !!state.updatedFrom || !!state.updatedTo;
+
+  const fetchFilteredStayIds = async (): Promise<number[]> => {
+    const p = new URLSearchParams();
+    if (state.q) p.set("search", state.q);
+    if (state.published) p.set("published", state.published);
+    if (state.type) p.set("type", state.type);
+    if (state.missingWebsite) p.set("missingWebsite", "true");
+    if (state.missingMap) p.set("missingMap", "true");
+    if (state.updatedFrom) p.set("updatedFrom", state.updatedFrom);
+    if (state.updatedTo) p.set("updatedTo", state.updatedTo);
+    const res = await api<{ ids: number[] }>("GET", `/api/admin/listings/stays/ids?${p.toString()}`);
+    return res.ids;
+  };
+
+  const filterSignature = JSON.stringify({
+    q: state.q, published: state.published, type: state.type, missingWebsite: state.missingWebsite,
+    missingMap: state.missingMap, updatedFrom: state.updatedFrom, updatedTo: state.updatedTo,
+  });
+  const { allSelected, toggleSelectAll } = useCrossPageSelection({
+    filterSignature,
+    fetchFilteredIds: fetchFilteredStayIds,
+    selectedIds,
+    setSelectedIds,
+    onError: (message) => toast({ title: message, variant: "destructive" }),
+  });
+
+  type PublishScope = "selected" | "filtered" | "all";
+  const publishPrimaryScope: PublishScope = selectedIds.length > 0 ? "selected" : (filtersActive ? "filtered" : "all");
+  const publishPrimaryLabel =
+    publishPrimaryScope === "selected" ? `Publish selected (${selectedIds.length})`
+      : publishPrimaryScope === "filtered" ? "Publish filtered"
+        : "Publish all";
+
+  const publishBulk = async (scope: PublishScope) => {
+    setBusy("publish");
+    try {
+      let published = 0;
+      let requested = 0;
+      if (scope === "all") {
+        const out = await api<{ published: number; requested: number }>("POST", "/api/admin/listings/stays/publish-all", {});
+        published = out.published;
+        requested = out.requested;
+      } else {
+        const targetIds = scope === "selected" ? selectedIds : await fetchFilteredStayIds();
+        if (!targetIds.length) {
+          toast({ title: "No stays to publish", description: "Selection/filter returned no rows.", variant: "destructive" });
+          return;
+        }
+        const out = await api<{ published: number; requested: number }>("POST", "/api/admin/listings/stays/publish-bulk", { stayIds: targetIds });
+        published = out.published;
+        requested = out.requested;
+      }
+      toast({ title: "Publish finished", description: `${published} of ${requested} stay(s) published` });
+      pushState({ ...state });
+    } catch (e: any) {
+      toast({ title: "Bulk publish failed", description: String(e.message || e), variant: "destructive" });
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const loadHistory = async () => {
     setHistory(await api<ExcelImportHistoryItem[]>("GET", "/api/admin/excel/import/stays/history"));
   };
@@ -153,21 +219,11 @@ export default function AdminListingsStays() {
       .catch(() => {});
   }, [token, preview]);
 
-  useEffect(() => {
-    const existingIds = new Set((data?.items ?? []).map((i) => i.id));
-    setSelectedIds((prev) => prev.filter((id) => existingIds.has(id)));
-  }, [data?.items]);
-
   const createStay = async () => {
     if (!newName.trim()) return;
     await api("POST", "/api/admin/listings/stays", { name: newName.trim() });
     setNewName("");
     setShowCreate(false);
-    pushState({ ...state });
-  };
-
-  const publishStay = async (id: number) => {
-    await api("POST", `/api/admin/listings/stays/${id}/publish`);
     pushState({ ...state });
   };
 
@@ -332,7 +388,6 @@ export default function AdminListingsStays() {
       header: "Actions",
       renderCell: (s) => (
         <div className="flex items-center gap-1">
-          {!s.published && <Button size="sm" variant="outline" onClick={() => void publishStay(s.id)}>Publish</Button>}
           <Button size="sm" variant="ghost" onClick={() => void deleteStay(s.id, s.name)} title="Move to Trash" className="text-muted-foreground hover:text-destructive">
             <Trash2 className="h-4 w-4" />
           </Button>
@@ -384,6 +439,22 @@ export default function AdminListingsStays() {
         toolbar={
           <div>
             <div className="flex flex-wrap gap-2">
+              <div className="inline-flex">
+                <Button size="sm" disabled={running} onClick={() => void publishBulk(publishPrimaryScope)} className="rounded-r-none">
+                  <SendHorizontal className="mr-2 h-4 w-4" />
+                  {publishPrimaryLabel}
+                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button size="sm" variant="outline" disabled={running} className="rounded-l-none border-l-0 px-2">
+                      <ChevronDown className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    <DropdownMenuItem onClick={() => void publishBulk(publishPrimaryScope)}>Publish content</DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
               <Button size="sm" variant="outline" disabled={!selectedIds.length} onClick={() => void exportRows("selected")}>Export selected</Button>
               <Button size="sm" variant="outline" onClick={() => void exportRows("filtered")}>Export filtered</Button>
               <Button size="sm" variant="outline" onClick={() => void exportRows("all")}>Export all</Button>
@@ -413,14 +484,8 @@ export default function AdminListingsStays() {
             return checked ? (prev.includes(n) ? prev : [...prev, n]) : prev.filter((x) => x !== n);
           })
         }
-        onSelectAll={(ids) =>
-          setSelectedIds((prev) => {
-            const numeric = ids.map((id) => (typeof id === "number" ? id : Number(id)));
-            const next = new Set(prev);
-            for (const n of numeric) next.add(n);
-            return Array.from(next);
-          })
-        }
+        allSelected={allSelected}
+        onSelectAllToggle={(checked) => void toggleSelectAll(checked)}
       />
 
       {history.length > 0 && (

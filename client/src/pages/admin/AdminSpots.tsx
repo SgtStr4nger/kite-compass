@@ -21,6 +21,7 @@ import { countryNameForCode, ISO2_TO_COUNTRY } from "@shared/locations";
 import { Plus, CheckCircle2, PencilLine, Circle, BadgeInfo, ChevronDown, Download, SendHorizontal, RefreshCw, ArrowRight, AlertTriangle } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
+import { useCrossPageSelection } from "@/hooks/useCrossPageSelection";
 
 function StatusPill({ published, hasDraft }: { published: boolean; hasDraft: boolean }) {
   if (published && !hasDraft) return <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700"><CheckCircle2 className="h-3.5 w-3.5" /> Published</span>;
@@ -164,12 +165,6 @@ export default function AdminSpots() {
       .finally(() => setLoading(false));
   }, [state, token, toast]);
 
-  // Prune stale selections when the underlying list changes.
-  useEffect(() => {
-    const existingIds = new Set((data?.items ?? []).map((row) => row.id));
-    setSelectedIds((prev) => prev.filter((id) => existingIds.has(id)));
-  }, [data?.items]);
-
   const loadHistory = async () => setHistory(await api<ExcelImportHistoryItem[]>("GET", "/api/admin/excel/import/spots/history"));
   useEffect(() => { if (token) void loadHistory(); }, [token]);
   useEffect(() => {
@@ -212,18 +207,46 @@ export default function AdminSpots() {
       : exportPrimaryScope === "filtered" ? "Export filtered JSON"
         : "Export all JSON";
 
-  const publishBulk = async (mode: "content" | "weather" | "content-weather") => {
-    const targetIds = selectedIds.length ? selectedIds : filteredIds;
-    if (!targetIds.length) {
-      toast({ title: "No spots to publish", description: "Selection/filter returned no rows.", variant: "destructive" });
-      return;
-    }
+  const fetchFilteredSpotIds = async (): Promise<number[]> => {
+    const p = new URLSearchParams();
+    if (state.q) p.set("search", state.q);
+    state.countries.forEach((c) => p.append("countries", c));
+    if (state.contentStatus) p.set("contentStatus", state.contentStatus);
+    if (state.dataStatus) p.set("dataStatus", state.dataStatus);
+    if (state.updatedFrom) p.set("updatedFrom", state.updatedFrom);
+    if (state.updatedTo) p.set("updatedTo", state.updatedTo);
+    if (state.publishedFrom) p.set("publishedFrom", state.publishedFrom);
+    if (state.publishedTo) p.set("publishedTo", state.publishedTo);
+    const res = await api<{ ids: number[] }>("GET", `/api/admin/listings/spots/ids?${p.toString()}`);
+    return res.ids;
+  };
+
+  const filterSignature = JSON.stringify({
+    q: state.q, countries: state.countries, contentStatus: state.contentStatus, dataStatus: state.dataStatus,
+    updatedFrom: state.updatedFrom, updatedTo: state.updatedTo, publishedFrom: state.publishedFrom, publishedTo: state.publishedTo,
+  });
+  const { allSelected, toggleSelectAll } = useCrossPageSelection({
+    filterSignature,
+    fetchFilteredIds: fetchFilteredSpotIds,
+    selectedIds,
+    setSelectedIds,
+    onError: (message) => toast({ title: message, variant: "destructive" }),
+  });
+
+  type PublishScope = "selected" | "filtered" | "all";
+  const publishPrimaryScope: PublishScope = selectedIds.length > 0 ? "selected" : (filtersActive ? "filtered" : "all");
+  const publishPrimaryLabel =
+    publishPrimaryScope === "selected" ? `Publish selected (${selectedIds.length})`
+      : publishPrimaryScope === "filtered" ? "Publish filtered"
+        : "Publish all";
+
+  const publishBulk = async (mode: "content" | "weather" | "content-weather", scope: PublishScope) => {
     setBusy("publish");
     try {
       const out = await api<{ targetSpots: number; contentPublished: number; weatherPublished: number; recalculatedRows: number }>(
         "POST",
-        "/api/admin/spots/publish-bulk",
-        { mode, spotIds: targetIds },
+        scope === "all" ? "/api/admin/spots/publish-all" : "/api/admin/spots/publish-bulk",
+        scope === "all" ? {} : { mode, spotIds: scope === "selected" ? selectedIds : await fetchFilteredSpotIds() },
       );
       const modeLabel = mode === "content" ? "Content" : mode === "weather" ? "Weather" : "Content + weather";
       toast({
@@ -481,9 +504,9 @@ export default function AdminSpots() {
                 </DropdownMenu>
               </div>
               <div className="inline-flex">
-                <Button size="sm" disabled={running} onClick={() => void publishBulk("content-weather")} className="rounded-r-none">
+                <Button size="sm" disabled={running} onClick={() => void publishBulk("content-weather", publishPrimaryScope)} className="rounded-r-none">
                   <SendHorizontal className="mr-2 h-4 w-4" />
-                  Publish all
+                  {publishPrimaryLabel}
                 </Button>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
@@ -492,9 +515,8 @@ export default function AdminSpots() {
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="start">
-                    <DropdownMenuItem onClick={() => void publishBulk("content")}>Publish content</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => void publishBulk("weather")}>Publish weather data</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => void publishBulk("content-weather")}>Publish all</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => void publishBulk("content", publishPrimaryScope)}>Publish content</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => void publishBulk("weather", publishPrimaryScope)}>Publish weather data</DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
@@ -563,14 +585,8 @@ export default function AdminSpots() {
             return checked ? (prev.includes(n) ? prev : [...prev, n]) : prev.filter((x) => x !== n);
           })
         }
-        onSelectAll={(ids) =>
-          setSelectedIds((prev) => {
-            const numeric = ids.map((id) => (typeof id === "number" ? id : Number(id)));
-            const next = new Set(prev);
-            for (const n of numeric) next.add(n);
-            return Array.from(next);
-          })
-        }
+        allSelected={allSelected}
+        onSelectAllToggle={(checked) => void toggleSelectAll(checked)}
         onRowClick={(s) => navigate(`/admin/spots/${s.id}`)}
       />
 

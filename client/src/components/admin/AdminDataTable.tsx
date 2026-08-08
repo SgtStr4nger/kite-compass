@@ -210,10 +210,15 @@ export default function AdminDataTable<T>({
   onPerPageChange,
   onSelect,
   onSelectAll,
+  allSelected,
+  onSelectAllToggle,
   onRowClick,
 }: AdminDataTableProps<T>) {
   const visibleIds = rows.map((row) => row[keyField] as string | number);
   const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.includes(id));
+  const headerChecked: boolean | "indeterminate" = onSelectAllToggle
+    ? (allSelected ?? false)
+    : allVisibleSelected;
   const totalPages = Math.max(1, Math.ceil(total / perPage));
   const colCount = columns.length + 1; // +1 for selection checkbox
 
@@ -227,8 +232,8 @@ export default function AdminDataTable<T>({
               {onSelect && (
                 <TableHead className="w-10 px-2 py-3">
                   <Checkbox
-                    checked={allVisibleSelected}
-                    onCheckedChange={(c) => onSelectAll?.(c ? visibleIds : [])}
+                    checked={headerChecked}
+                    onCheckedChange={(c) => (onSelectAllToggle ? onSelectAllToggle(!!c) : onSelectAll?.(c ? visibleIds : []))}
                   />
                 </TableHead>
               )}
