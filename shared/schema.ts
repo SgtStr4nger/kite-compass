@@ -308,6 +308,33 @@ export const weatherRefreshState = sqliteTable("weather_refresh_state", {
 });
 export type WeatherRefreshState = typeof weatherRefreshState.$inferSelect;
 
+/* ─────────────── AI enrichment settings (spec #74) ───────────────
+ * Singleton row (id=1) holding the DeepSeek provider connection. The API key is
+ * stored server-side only; the routes layer masks it before responding so it
+ * never reaches the client or the request/response log.
+ */
+export const aiSettings = sqliteTable("ai_settings", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  apiKey: text("api_key").notNull().default(""),
+  model: text("model").notNull().default("deepseek-v4-flash"),
+  baseUrl: text("base_url").notNull().default("https://api.deepseek.com"),
+  updatedAt: text("updated_at"),
+});
+export type AiSettingsRow = typeof aiSettings.$inferSelect;
+
+/* Background AI enrichment job state (mirror of weather_refresh_state). */
+export const aiEnrichState = sqliteTable("ai_enrich_state", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  status: text("status").notNull().default("Idle"),
+  totalSpots: integer("total_spots").notNull().default(0),
+  completedSpots: integer("completed_spots").notNull().default(0),
+  message: text("message").notNull().default(""),
+  dismissible: integer("dismissible", { mode: "boolean" }).default(false),
+  dismissed: integer("dismissed", { mode: "boolean" }).default(false),
+  updatedAt: text("updated_at"),
+});
+export type AiEnrichState = typeof aiEnrichState.$inferSelect;
+
 /* ─────────────── Redirects (spec §29) ─────────────── */
 export const redirects = sqliteTable("redirects", {
   id: integer("id").primaryKey({ autoIncrement: true }),

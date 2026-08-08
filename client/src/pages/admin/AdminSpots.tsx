@@ -18,7 +18,7 @@ import {
   AdminFilterOption,
 } from "@/lib/types";
 import { countryNameForCode, ISO2_TO_COUNTRY } from "@shared/locations";
-import { Plus, CheckCircle2, PencilLine, Circle, BadgeInfo, ChevronDown, Download, SendHorizontal, RefreshCw, ArrowRight, AlertTriangle } from "lucide-react";
+import { Plus, CheckCircle2, PencilLine, Circle, BadgeInfo, ChevronDown, Download, SendHorizontal, RefreshCw, ArrowRight, AlertTriangle, Sparkles } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useCrossPageSelection } from "@/hooks/useCrossPageSelection";
 
@@ -251,6 +251,42 @@ export default function AdminSpots() {
       pushState({ ...state });
     } catch (e: any) {
       toast({ title: "Bulk publish failed", description: String(e.message || e), variant: "destructive" });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const enrichAi = async () => {
+    if (running) return;
+    const targetIds = selectedIds.length ? selectedIds : filteredIds;
+    if (!targetIds.length) {
+      toast({ title: "Nothing to enrich", description: "No spots selected.", variant: "destructive" });
+      return;
+    }
+    if (targetIds.length > 100) {
+      const ok = window.confirm(
+        `You are about to enrich ${targetIds.length} spots with AI. This issues one API request per spot with empty fields and can be costly. Continue?`,
+      );
+      if (!ok) return;
+    }
+    setBusy("ai-enrich");
+    try {
+      const out = await api<{ accepted: boolean; spots: number; skipped: number; error?: string }>(
+        "POST",
+        "/api/admin/ai/enrich",
+        { spotIds: targetIds },
+      );
+      if (out.accepted) {
+        toast({
+          title: "AI enrichment started",
+          description: `${out.spots} spot(s) queued (${out.skipped} already complete)`,
+        });
+      } else {
+        toast({ title: "AI enrichment", description: out.error || "No eligible spots." });
+      }
+      pushState({ ...state });
+    } catch (e: any) {
+      toast({ title: "AI enrichment failed", description: String(e.message || e), variant: "destructive" });
     } finally {
       setBusy(null);
     }
@@ -514,6 +550,10 @@ export default function AdminSpots() {
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
+              <Button size="sm" variant="outline" disabled={running} onClick={() => void enrichAi()} data-testid="button-spots-enrich-ai">
+                <Sparkles className="mr-2 h-4 w-4" />
+                Enrich with AI
+              </Button>
               <div className="inline-flex">
                 <Button size="sm" variant="outline" disabled={running} onClick={() => refreshScope(selectedIds.length ? "selected" : "filtered", selectedIds.length ? selectedIds : filteredIds)} className="rounded-r-none">
                   <RefreshCw className="mr-2 h-4 w-4" />

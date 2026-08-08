@@ -6,8 +6,9 @@ import { execFile, type ExecFileException } from 'node:child_process';
 import { and, eq } from "drizzle-orm";
 import { db, storage, sqlite, logError } from "./storage";
 import { log } from "./log";
-import type { ListingsFilter, SeoContent, TrashCategory, RedirectRow, AdminErrorStatus } from "./storage";
+import type { ListingsFilter, SeoContent, TrashCategory, RedirectRow, AdminErrorStatus, AiSettingsContent } from "./storage";
 import { enrichSpotById, MissingCoordinatesError } from "./services/enrichment";
+import { AiNotConfiguredError, AiProviderError, AI_FILLABLE_FIELDS, enrichOneSpot, isFieldEmpty } from "./services/aiContent";
 import { getWaitState, setBudgetWaitListener } from "./services/openMeteoBudget";
 import { reverseGeocodeCountry } from "./services/reverseGeocode";
 import { getContinentForCountry, countryNameForCode, normalizeCountryCode } from "@shared/locations";
@@ -26,6 +27,7 @@ const MONTH_ORDER = [
 type WeatherStatus = "Missing" | "Up to date" | "Up to date · Manual changes" | "Outdated" | "Update failed";
 
 let scoringRecalcActive = false;
+let aiEnrichActive = false;
 
 const REFRESH_SPOT_DELAY_MS = 1500;
 const EXCEL_MAX_ROWS = 5000;
@@ -1218,6 +1220,81 @@ async function runWeatherRefreshForSpots(spots: Spot[], opts: { kiteableDayMinHo
     dismissed: false,
   });
   return { updatedSpotIds, skipped, failures };
+}
+
+interface AiEnrichFailure {
+  id: number;
+  slug: string;
+  name: string;
+  error: string;
+}
+
+/**
+ * Fire-and-forget AI enrichment job for the given spots. Sequential, one API
+ * call per spot (only when it has ≥1 empty fillable field). Writes DRAFTS only.
+ * Updates the DB-backed ai-enrich state after each spot; surfaces failed spot
+ * names in the final message (capped) and logs them as admin errors.
+ */
+async function runAiEnrichJob(spots: Spot[]): Promise<void> {
+  const failures: AiEnrichFailure[] = [];
+  let updatedCount = 0;
+  try {
+    await storage.setAiEnrichStatus({
+      status: "Enriching spots with AI",
+      totalSpots: spots.length,
+      completedSpots: 0,
+      message: `Enriching spots with AI (0/${spots.length})`,
+      dismissible: false,
+      dismissed: false,
+    });
+    for (let i = 0; i < spots.length; i++) {
+      const spot = spots[i];
+      try {
+        const out = await enrichOneSpot(spot);
+        if (out.writtenFields.length) updatedCount++;
+      } catch (e: any) {
+        const errMsg = e instanceof AiNotConfiguredError || e instanceof AiProviderError
+          ? String(e.message)
+          : String(e?.message ?? e);
+        failures.push({ id: spot.id, slug: spot.slug, name: spot.name, error: errMsg });
+        void logError("AI Enrichment", `AI enrich failed for spot "${spot.name}": ${errMsg}`, `spot:${spot.id}`);
+      } finally {
+        await storage.setAiEnrichStatus({
+          status: "Enriching spots with AI",
+          totalSpots: spots.length,
+          completedSpots: i + 1,
+          message: `Enriching spots with AI (${i + 1}/${spots.length})`,
+          dismissible: false,
+          dismissed: false,
+        });
+      }
+    }
+    const failedNames = failures.map(f => f.name);
+    const cap = failedNames.length > 5 ? failedNames.slice(0, 5).join(", ") + `, +${failedNames.length - 5} more` : failedNames.join(", ");
+    await storage.setAiEnrichStatus({
+      status: failures.length ? "AI enrichment failed" : "AI enrichment completed",
+      totalSpots: spots.length,
+      completedSpots: spots.length,
+      message: failures.length
+        ? `Completed ${updatedCount} spot(s), ${failures.length} failed: ${cap}`
+        : `Enriched ${updatedCount} spot(s)`,
+      dismissible: true,
+      dismissed: false,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "AI enrichment failed";
+    await storage.setAiEnrichStatus({
+      status: "AI enrichment failed",
+      totalSpots: spots.length,
+      completedSpots: 0,
+      message,
+      dismissible: true,
+      dismissed: false,
+    });
+    void logError("AI Enrichment", `AI batch enrichment failed: ${message}`, null);
+  } finally {
+    aiEnrichActive = false;
+  }
 }
 
 /* ───────── Auth helpers (no cookies/localStorage — Bearer token) ───────── */
@@ -2819,6 +2896,73 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/admin/weather-refresh/dismiss", requireAuth, async (_req, res) => {
     res.json(await storage.dismissWeatherRefreshStatus());
+  });
+
+  // ── AI content enrichment (spec #74) ──
+  // Settings key is masked server-side so the raw key never reaches the client
+  // or the request/response log.
+  const maskAiSettings = (s: AiSettingsContent) => ({
+    apiKeySet: !!s.apiKey,
+    apiKeyHint: s.apiKey && s.apiKey.length >= 4 ? s.apiKey.slice(-4) : null,
+    model: s.model,
+    baseUrl: s.baseUrl,
+    updatedAt: s.updatedAt,
+  });
+
+  app.get("/api/admin/ai/settings", requireAuth, async (_req, res) => {
+    const s = await storage.getAiSettings();
+    res.json(maskAiSettings(s));
+  });
+
+  app.patch("/api/admin/ai/settings", requireAuth, requireMainAdmin, async (req, res) => {
+    const body = req.body || {};
+    const patch: { apiKey?: string; model?: string; baseUrl?: string } = {};
+    if (body.apiKey !== undefined) {
+      if (typeof body.apiKey !== "string") return res.status(400).json({ error: "apiKey must be a string" });
+      patch.apiKey = body.apiKey; // keep semantics handled by storage (omitted keeps; "" clears)
+    }
+    if (body.model !== undefined) {
+      const model = typeof body.model === "string" ? body.model.trim() : "";
+      if (!model) return res.status(400).json({ error: "model must be a non-empty string" });
+      patch.model = model;
+    }
+    if (body.baseUrl !== undefined) {
+      const baseUrl = typeof body.baseUrl === "string" ? body.baseUrl.trim() : "";
+      if (!baseUrl) return res.status(400).json({ error: "baseUrl must be a non-empty string" });
+      patch.baseUrl = baseUrl;
+    }
+    const s = await storage.saveAiSettings(patch);
+    res.json(maskAiSettings(s));
+  });
+
+  app.post("/api/admin/ai/enrich", requireAuth, async (req, res) => {
+    if (isExcelImportActive()) return res.status(409).json({ error: "Excel import is active" });
+    if (aiEnrichActive) return res.status(409).json({ error: "AI enrichment is already running" });
+    const settings = await storage.getAiSettings();
+    if (!settings.apiKey || !settings.apiKey.trim()) {
+      return res.status(400).json({ error: "AI provider not configured — add the API key in Settings → AI first" });
+    }
+    const scopedIds = Array.from(new Set(parseSpotIds(req.body?.spotIds)));
+    if (!scopedIds.length) return res.status(400).json({ error: "spotIds required" });
+    const availableSpots = await storage.listSpots(false);
+    const targetSpots = availableSpots.filter((spot) => scopedIds.includes(spot.id));
+    if (!targetSpots.length) return res.status(404).json({ error: "no matching spots found" });
+    const eligible = targetSpots.filter((spot) => AI_FILLABLE_FIELDS.some((key) => isFieldEmpty(spot, key)));
+    const skipped = targetSpots.length - eligible.length;
+    if (!eligible.length) {
+      return res.status(200).json({ accepted: false, spots: 0, skipped: targetSpots.length, error: "no spots have empty AI-fillable fields" });
+    }
+    aiEnrichActive = true;
+    void runAiEnrichJob(eligible);
+    res.status(202).json({ accepted: true, spots: eligible.length, skipped });
+  });
+
+  app.get("/api/admin/ai/enrich/status", requireAuth, async (_req, res) => {
+    res.json(await storage.getAiEnrichStatus());
+  });
+
+  app.post("/api/admin/ai/enrich/dismiss", requireAuth, async (_req, res) => {
+    res.json(await storage.dismissAiEnrichStatus());
   });
 
   app.post("/api/admin/scoring/publish", requireAuth, async (req, res) => {

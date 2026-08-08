@@ -16,6 +16,7 @@ import AdminLogin from "@/pages/admin/AdminLogin";
 import AdminChangePassword from "@/pages/admin/AdminChangePassword";
 import AdminImpressum from "@/pages/admin/AdminImpressum";
 import AdminScoring from "@/pages/admin/AdminScoring";
+import AdminAI from "@/pages/admin/AdminAI";
 import AdminSettings from "@/pages/admin/AdminSettings";
 import AdminSpots from "@/pages/admin/AdminSpots";
 import AdminSpotEditor from "@/pages/admin/AdminSpotEditor";
@@ -42,6 +43,7 @@ function AppRouter() {
       <Route path="/admin/legal" component={AdminImpressum} />
       <Route path="/admin/impressum" component={AdminImpressum} />
       <Route path="/admin/scoring" component={AdminScoring} />
+      <Route path="/admin/ai" component={AdminAI} />
       <Route path="/admin/settings" component={AdminSettings} />
       <Route path="/admin/seo" component={AdminSEO} />
       <Route path="/admin/users" component={AdminUsers} />
