@@ -5,8 +5,8 @@ import { api } from "@/lib/api";
 import { AdminLayout } from "./AdminLayout";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
 import AdminDataTable from "@/components/admin/AdminDataTable";
+import ImportButton from "@/components/admin/ImportButton";
 import {
   AdminSpotListItem,
   ExcelImportAction,
@@ -557,7 +557,7 @@ export default function AdminSpots() {
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
-              <Input type="file" accept=".json,application/json" className="max-w-xs" disabled={importBusy} onChange={e => void onUpload(e.target.files?.[0] ?? null)} />
+              <ImportButton accept=".json,application/json" disabled={importBusy} onFile={(f) => void onUpload(f)} />
             </div>
             {preview && (
               <div className="mt-3 rounded border border-border p-3 text-sm">
